@@ -1,0 +1,111 @@
+import json
+import time
+import pytest
+from pydantic import ValidationError
+from fastapi.testclient import TestClient
+from app.main import create_app
+from app.models import MachineInput, Endpoint
+from app.store import Store
+
+
+@pytest.mark.parametrize("host", ["http://1.2.3.4", "999.2.3.4", "x;shutdown", "", "224.0.0.1", "0.0.0.0", "-bad", "a/b"])
+def test_invalid_addresses(host):
+    with pytest.raises(ValidationError):
+        Endpoint(host=host)
+
+
+@pytest.mark.parametrize("host", ["192.168.10.20", "cnc-floor.example", "::1", "2001:db8::2"])
+def test_valid_addresses(host):
+    assert Endpoint(host=host).host == host
+
+
+def test_store_corruption_does_not_reset_identities(tmp_path):
+    path = tmp_path / "machines.json"
+    path.write_text('{"version":42,"machines":[]}')
+    with pytest.raises(ValueError): Store(path)
+    assert '42' in path.read_text()
+
+
+def test_api_onboarding_identity_and_restart(tmp_path):
+    app = create_app(tmp_path, {"mode": "simulation"}, development=True)
+    with TestClient(app) as client:
+        csrf = client.get("/api/status").json()["csrf"]
+        headers = {"x-monitor-csrf": csrf}
+        endpoint = {"host": "192.0.2.20", "port": 8193, "timeout": 3}
+        value = {**endpoint, "name": "Lathe A", "interval": 1, "enabled": True}
+        assert client.post("/api/machines", json=value).status_code == 403
+        assert client.post("/api/machines", json=value, headers=headers).status_code == 409
+        tested = client.post("/api/test", json=endpoint, headers=headers).json()
+        assert tested["simulation"] is True and tested["controller"]["series"] == "0i"
+        assert "192.0.2.20" in tested["suggested_name"]
+        headers["x-connection-test"] = tested["test_token"]
+        assert client.post("/api/machines", json={**value, "host": "192.0.2.21"}, headers=headers).status_code == 409
+        response = client.post("/api/machines", json=value, headers=headers)
+        assert response.status_code == 201, response.text
+        machine = response.json(); identity = machine["id"]
+        time.sleep(.1)
+        item = client.get("/api/status").json()["machines"][0]
+        assert item["online"] and item["last_success"] and len(item["signals"]) >= 15
+        journal = json.loads((tmp_path / "mqtt-journal.json").read_text())
+        config_topic = next(t for t in journal["topics"] if t.startswith("homeassistant/"))
+        config = json.loads(journal["topics"][config_topic])
+        uniques = {c["unique_id"] for c in config["components"].values()}
+        assert config["device"]["identifiers"] == [identity]
+        assert {c["platform"] for c in config["components"].values()} == {"sensor", "binary_sensor"}
+        assert "command_topic" not in json.dumps(config)
+        rename = {**value, "name": "Renamed lathe", "revision": 1}
+        assert client.put("/api/machines/" + identity, json=rename, headers=headers).status_code == 200
+        assert client.put("/api/machines/" + identity, json=rename, headers=headers).status_code == 409
+        time.sleep(.1)
+        new_config = json.loads(json.loads((tmp_path / "mqtt-journal.json").read_text())["topics"][config_topic])
+        assert uniques == {c["unique_id"] for c in new_config["components"].values()}
+        assert new_config["device"]["name"] == "Renamed lathe"
+    with TestClient(create_app(tmp_path, {"mode": "simulation"}, development=True)) as client:
+        status = client.get("/api/status").json()
+        assert status["machines"][0]["id"] == identity
+        assert status["machines"][0]["name"] == "Renamed lathe"
+        assert client.delete("/api/machines/" + identity, headers={"x-monitor-csrf": status["csrf"]}).status_code == 200
+        assert client.get("/api/status").json()["machines"] == []
+    journal = json.loads((tmp_path / "mqtt-journal.json").read_text())
+    assert journal["topics"][config_topic] == ""
+    assert all(payload == "" for topic, payload in journal["topics"].items() if "/machine/" in topic)
+
+
+def test_ingress_peer_and_base_path(tmp_path):
+    with TestClient(create_app(tmp_path, {}, development=False)) as client:
+        assert client.get("/", headers={"x-forwarded-for": "172.30.32.2"}).status_code == 403
+    with TestClient(create_app(tmp_path, {}, development=True)) as client:
+        response = client.get("/", headers={"x-ingress-path": "/api/hassio_ingress/test-token"})
+        assert '<base href="/api/hassio_ingress/test-token/">' in response.text
+        assert client.get("/", headers={"x-ingress-path": 'https://evil.example/'}).status_code == 400
+        assert client.get("/assets/app.js").status_code == 200
+        assert client.get("/assets/other.js").status_code == 404
+
+
+def test_hardware_mode_fails_closed(tmp_path):
+    with TestClient(create_app(tmp_path, {"mode": "focas", "hardware_testing_enabled": False}, development=True)) as client:
+        status = client.get("/api/status").json()
+        assert "Hardware testing is disabled" in status["startup_error"]
+        assert client.post("/api/test", json={"host": "192.0.2.1"}, headers={"x-monitor-csrf": status["csrf"]}).status_code == 409
+
+
+def test_stale_data_marks_machine_offline_independently(tmp_path):
+    app = create_app(tmp_path, {"mode": "simulation"}, development=True)
+    with TestClient(app) as client:
+        headers = {"x-monitor-csrf": client.get("/api/status").json()["csrf"]}
+        endpoint = {"host": "192.0.2.30", "port": 8193, "timeout": 3}
+        headers["x-connection-test"] = client.post("/api/test", json=endpoint, headers=headers).json()["test_token"]
+        identity = client.post("/api/machines", json={**endpoint, "name": "Stale test", "interval": 60}, headers=headers).json()["id"]
+        deadline = time.monotonic() + 2
+        while not app.state.manager.status[identity]["online"] and time.monotonic() < deadline:
+            time.sleep(.02)
+        assert app.state.manager.status[identity]["online"]
+        # Advance observed age, without waiting minutes or contacting hardware.
+        app.state.manager.status[identity]["last_success"] = "2000-01-01T00:00:00+00:00"
+        deadline = time.monotonic() + 2
+        while app.state.manager.status[identity]["online"] and time.monotonic() < deadline:
+            time.sleep(.02)
+        status = client.get("/api/status").json()["machines"][0]
+        assert not status["online"] and "stale" in status["error"]
+        pub = app.state.publisher
+        assert pub.journal["topics"][pub.machine_root(identity) + "/availability"] == "offline"

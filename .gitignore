@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+*.log
+data/
+bin/
+obj/
+RestrictedFocas.generated.cs
+.pytest_cache/
+*.so*
+!fanuc_monitor/native/libfwlib32-linux-x64.so.1.0.5
+*.dll
+*.zip

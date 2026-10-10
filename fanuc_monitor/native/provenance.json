@@ -1,0 +1,7 @@
+{
+  "repository": "https://github.com/strangesast/fwlib",
+  "url": "https://raw.githubusercontent.com/strangesast/fwlib/5afeb97fde391cb86da43bb3b770c3e71d61e96b/libfwlib32-linux-x64.so.1.0.5",
+  "sha256": "0304931e1366e57ff19f42021f84ac2cb694b0b2c764e0b99d81317ee0880d84",
+  "commit": "5afeb97fde391cb86da43bb3b770c3e71d61e96b",
+  "filename": "libfwlib32-linux-x64.so.1.0.5"
+}

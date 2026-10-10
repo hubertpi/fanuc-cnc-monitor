@@ -1,0 +1,4 @@
+{
+  "session": ["cnc_startupprocess", "cnc_exitprocess", "cnc_allclibhndl3", "cnc_freelibhndl"],
+  "read": ["cnc_sysinfo", "cnc_statinfo", "cnc_rdspeed", "cnc_rdspmeter", "cnc_rdsvmeter", "cnc_rdprgnum", "cnc_rdprogdir3", "cnc_rdalmmsg2", "cnc_rdopmsg", "cnc_modal", "cnc_rdopnlsgnl"]
+}

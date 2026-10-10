@@ -1,0 +1,26 @@
+name: Isolated validation
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.401'
+      - run: pip install --require-hashes -r fanuc_monitor/requirements.lock
+      - run: pip install -r requirements-dev.txt
+      - run: python fanuc_monitor/worker/prepare_binding.py
+      - run: dotnet build fanuc_monitor/worker/Monitor.Worker.csproj --configuration Release
+      - run: dotnet fanuc_monitor/worker/bin/Release/net10.0/Monitor.Worker.dll --self-test
+      - run: pytest tests -q
+      - run: docker build --tag fanuc-monitor:test fanuc_monitor
+      - run: docker run --rm --entrypoint dotnet fanuc-monitor:test /opt/worker/Monitor.Worker.dll --self-test
+      - run: docker run --rm --network none --entrypoint dotnet fanuc-monitor:test /opt/worker/Monitor.Worker.dll --native-self-test
+      # No image upload or registry push while SDK redistribution rights and
+      # real HA/Fanuc acceptance are unresolved. No production endpoints.

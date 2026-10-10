@@ -1,0 +1,24 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Start isolated Home Assistant",
+      "type": "shell",
+      "command": "supervisor_run",
+      "problemMatcher": [],
+      "presentation": {"reveal": "always", "panel": "new"}
+    },
+    {
+      "label": "Install Fanuc CNC Monitor in test Supervisor",
+      "type": "shell",
+      "command": "ha apps install local_fanuc_cnc_monitor",
+      "problemMatcher": []
+    },
+    {
+      "label": "Start Fanuc CNC Monitor in test Supervisor",
+      "type": "shell",
+      "command": "ha apps start local_fanuc_cnc_monitor",
+      "problemMatcher": []
+    }
+  ]
+}

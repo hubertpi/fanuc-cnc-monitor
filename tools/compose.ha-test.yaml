@@ -1,0 +1,24 @@
+name: fanuc-ha-test
+services:
+  supervisor-host:
+    image: ghcr.io/home-assistant/devcontainer@sha256:9c08de75a4d91938dab76d44846a2d297d4ce92bf80024ff15a4f6dff766855e
+    container_name: fanuc-ha-test
+    restart: unless-stopped
+    privileged: true
+    environment:
+      WORKSPACE_DIRECTORY: /mnt/supervisor/apps/local/fanuc-cnc-monitor
+      SUPERVISOR_CHANNEL: stable
+    ports:
+      - "127.0.0.1:7123:80"
+      - "127.0.0.1:7357:4357"
+    volumes:
+      - docker:/var/lib/docker
+      - containerd:/var/lib/containerd
+      - supervisor:/mnt/supervisor
+      - ..:/mnt/supervisor/apps/local/fanuc-cnc-monitor
+    tmpfs:
+      - /tmp
+volumes:
+  docker:
+  containerd:
+  supervisor:

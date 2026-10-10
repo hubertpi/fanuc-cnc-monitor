@@ -1,0 +1,36 @@
+name: Fanuc CNC Monitor
+version: 0.1.0-dev
+slug: fanuc_cnc_monitor
+url: https://github.com/hubertpi/fanuc-cnc-monitor
+description: Local read-only Fanuc monitoring with machine management and MQTT discovery
+arch: [amd64]
+startup: application
+boot: auto
+init: false
+ingress: true
+ingress_port: 8099
+panel_icon: mdi:factory
+panel_title: Fanuc CNC Monitor
+hassio_api: true
+services: [mqtt:want]
+map:
+  - type: share
+    read_only: true
+options:
+  mode: simulation
+  hardware_testing_enabled: false
+  native_library_sha256: ""
+  mqtt_host: ""
+  mqtt_port: 1883
+  mqtt_username: ""
+  mqtt_password: ""
+  mqtt_tls: false
+schema:
+  mode: list(simulation|focas)
+  hardware_testing_enabled: bool
+  native_library_sha256: str
+  mqtt_host: str
+  mqtt_port: port
+  mqtt_username: str
+  mqtt_password: password
+  mqtt_tls: bool

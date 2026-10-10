@@ -1,0 +1,10 @@
+{
+  "sdk": {
+    "tag": "sdk:10.0.401-noble-amd64",
+    "digest": "sha256:0eeb52c76e35a5431ca707ad2bc75e38006a05393045d8532ae44c15d9474523"
+  },
+  "runtime": {
+    "tag": "runtime:10.0.12-noble-amd64",
+    "digest": "sha256:5b280fe869ce058778531aa13d9a3ddf1efa0e889524904753da6fc48aada91e"
+  }
+}

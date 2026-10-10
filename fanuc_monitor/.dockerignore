@@ -1,0 +1,8 @@
+worker/bin
+worker/obj
+worker/RestrictedFocas.generated.cs
+**/__pycache__
+**/*.so*
+!native/libfwlib32-linux-x64.so.1.0.5
+**/*.dll
+*.log

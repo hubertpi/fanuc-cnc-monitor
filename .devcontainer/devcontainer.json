@@ -1,0 +1,24 @@
+{
+  "name": "Fanuc CNC Monitor — isolated Home Assistant Supervisor",
+  "image": "ghcr.io/home-assistant/devcontainer@sha256:9c08de75a4d91938dab76d44846a2d297d4ce92bf80024ff15a4f6dff766855e",
+  "overrideCommand": false,
+  "remoteUser": "vscode",
+  "appPort": ["127.0.0.1:7123:80", "127.0.0.1:7357:4357"],
+  "postStartCommand": "bash devcontainer_bootstrap",
+  "runArgs": ["--privileged"],
+  "workspaceFolder": "/mnt/supervisor/apps/local/${localWorkspaceFolderBasename}",
+  "workspaceMount": "source=${localWorkspaceFolder},target=${containerWorkspaceFolder},type=bind",
+  "containerEnv": {
+    "WORKSPACE_DIRECTORY": "${containerWorkspaceFolder}",
+    "SUPERVISOR_CHANNEL": "stable"
+  },
+  "mounts": [
+    "type=volume,source=fanuc-test-docker,target=/var/lib/docker",
+    "type=volume,source=fanuc-test-containerd,target=/var/lib/containerd",
+    "type=volume,source=fanuc-test-supervisor,target=/mnt/supervisor",
+    "type=tmpfs,target=/tmp"
+  ],
+  "customizations": {
+    "vscode": {"settings": {"editor.formatOnSave": false}}
+  }
+}
