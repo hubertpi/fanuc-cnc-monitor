@@ -86,7 +86,7 @@ python -m pytest tests -q
 docker build -t fanuc-cnc-monitor:dev fanuc_monitor
 ```
 
-Binding preparation downloads pinned, SHA-256 checked upstream source and strips
+Binding preparation verifies bundled, SHA-256 pinned upstream source and strips
 imports outside the allowlist. The native runtime is bundled and hash-checked during builds.
 Runtime wheels and base images are pinned by hashes/digests; Ubuntu packages use
 a fixed snapshot. The supplied Linux CI workflow has not run locally.

@@ -6,12 +6,12 @@ RUN sed -i -E 's#https?://(archive|security)\.ubuntu\.com/ubuntu/?#https://snaps
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /source
 COPY worker/ ./worker/
-RUN python3 worker/prepare_binding.py \
+RUN --network=none python3 worker/prepare_binding.py \
     && dotnet publish worker/Monitor.Worker.csproj -c Release -o /published --self-contained false \
     && dotnet /published/Monitor.Worker.dll --self-test
 
 FROM mcr.microsoft.com/dotnet/runtime@sha256:5b280fe869ce058778531aa13d9a3ddf1efa0e889524904753da6fc48aada91e
-ARG BUILD_VERSION=0.1.0-dev
+ARG BUILD_VERSION=0.1.1-dev
 LABEL io.hass.version="${BUILD_VERSION}" io.hass.type="app" io.hass.arch="amd64"
 RUN sed -i -E 's#https?://(archive|security)\.ubuntu\.com/ubuntu/?#https://snapshot.ubuntu.com/ubuntu/20261009T000000Z/#g' /etc/apt/sources.list.d/ubuntu.sources \
     && apt-get update && apt-get install -y --no-install-recommends python3 python3-venv ca-certificates \

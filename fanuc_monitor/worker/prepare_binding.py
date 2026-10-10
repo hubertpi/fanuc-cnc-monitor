@@ -7,7 +7,6 @@ import hashlib
 import json
 import re
 import sys
-import urllib.request
 from pathlib import Path
 
 REVISION = "b9080d0938757789159714c38305fe559728e146"
@@ -99,8 +98,10 @@ def verify_source(raw, expected):
 
 def main():
     lock = json.loads((HERE / "upstream.lock.json").read_text())
-    raw = Path(sys.argv[1]).read_bytes() if len(sys.argv) > 1 else urllib.request.urlopen(
-        f"https://raw.githubusercontent.com/Ladder99/fanuc-driver/{REVISION}/fanuc/fwlib.cs", timeout=30).read()
+    # Bundle the immutable input so HA installs do not depend on a second
+    # HTTPS connection to raw.githubusercontent.com inside the build container.
+    source = Path(sys.argv[1]) if len(sys.argv) > 1 else HERE / "upstream" / "fwlib.cs.txt"
+    raw = source.read_bytes()
     allow = json.loads((HERE / "allowlist.json").read_text())
     output = restrict(verify_source(raw, lock["binding_sha256"]), set(allow["read"] + allow["session"]))
     (HERE / "RestrictedFocas.generated.cs").write_text(output, encoding="utf-8")

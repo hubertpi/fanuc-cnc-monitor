@@ -62,6 +62,25 @@ def test_worker_calls_match_exact_read_session_allowlist():
         assert declarations == allow
 
 
+def test_bundled_binding_generates_without_network(tmp_path, monkeypatch):
+    module = prepare_module()
+    import shutil
+    import sys
+    import urllib.request
+    shutil.copytree(WORKER / 'upstream', tmp_path / 'upstream')
+    for name in ('upstream.lock.json', 'allowlist.json'):
+        shutil.copy2(WORKER / name, tmp_path / name)
+    monkeypatch.setattr(module, 'HERE', tmp_path)
+    monkeypatch.setattr(sys, 'argv', ['prepare_binding.py'])
+    def no_network(*args, **kwargs):
+        pytest.fail('Binding generation must not access the network')
+    monkeypatch.setattr(urllib.request, 'urlopen', no_network)
+    module.main()
+    generated = (tmp_path / 'RestrictedFocas.generated.cs').read_text(encoding='utf-8')
+    assert 'cnc_statinfo' in generated
+    assert 'extern short cnc_reset(' not in generated
+
+
 def test_no_control_topics_or_code_config():
     source = (ROOT / "fanuc_monitor/app/mqtt.py").read_text()
     assert '.subscribe("homeassistant/status"' in source

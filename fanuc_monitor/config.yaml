@@ -1,5 +1,5 @@
 name: Fanuc CNC Monitor
-version: 0.1.0-dev
+version: 0.1.1-dev
 slug: fanuc_cnc_monitor
 url: https://github.com/hubertpi/fanuc-cnc-monitor
 description: Local read-only Fanuc monitoring with machine management and MQTT discovery
