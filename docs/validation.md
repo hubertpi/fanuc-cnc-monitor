@@ -2,6 +2,14 @@
 
 October 10, 2026. All HA tests used simulated CNC data; no production equipment.
 
+Public source snapshot `fe1d4eb` passed [GitHub Actions](https://github.com/hubertpi/fanuc-cnc-monitor/actions/runs/38034117108),
+including Python tests, Linux image build, worker self-test and network-disabled
+native library load/export verification. Adding the public repository URL to
+the isolated Supervisor store installed `8393d05f_fanuc_cnc_monitor` successfully.
+Its Ingress API and automatic MQTT credentials worked, and a new simulator
+created one HA device with 17 live entities. This validates installation from
+GitHub, not only the local development mount.
+
 - 30 Python tests passed, including a real loopback MQTT broker, persistence,
   MQTT lifecycle, read-only allowlist and native-package integrity checks.
 - Linux amd64 image built and installed by Supervisor 2026.09.3 with HA Core

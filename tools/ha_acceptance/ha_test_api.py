@@ -40,4 +40,3 @@ def ingress_client():
     c = client()
     c.cookies.set('ingress_session', session['session'])
     return c, addon['ingress_url']
-
