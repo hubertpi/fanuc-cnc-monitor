@@ -8,7 +8,7 @@ import subprocess
 import pytest
 
 
-def test_emergency_stop_enum_reset_wait_and_unknown_are_not_emergency(tmp_path):
+def test_status_enums_reset_warnings_modes_and_unknowns(tmp_path):
     dotnet, compiler = shutil.which('dotnet'), shutil.which('cc')
     worker = Path(__file__).resolve().parents[1] / 'fanuc_monitor/worker/bin/Release/net10.0/Monitor.Worker.dll'
     if not dotnet or not compiler or not worker.is_file():
@@ -22,21 +22,27 @@ short cnc_exitprocess(){return 0;}
 short cnc_allclibhndl3(const char *host,unsigned short port,int timeout,unsigned short *h){*h=0;return 0;}
 short cnc_freelibhndl(){return 0;}
 short cnc_sysinfo(unsigned short h,void *p){memset(p,0,18);return 0;}
-short cnc_statinfo(unsigned short h,void *p){short values[]={0,2,0,1,0,3,9};memset(p,0,18);((short*)p)[6]=values[reads++];return 0;}
+short cnc_statinfo(unsigned short h,void *p){short values[]={0,2,0,1,0,3,9,0,0,0,0,0,0}; int i=reads++; memset(p,0,18); ((short*)p)[6]=values[i]; ((short*)p)[7]=i; ((short*)p)[2]=i; ((short*)p)[3]=i%6;return 0;}
 short cnc_rdspeed(){return 6;}
 ''')
     library = tmp_path / 'fake.so'
     subprocess.run([compiler, '-shared', '-fPIC', str(source), '-o', str(library)], check=True)
     request = {'host': '192.0.2.1', 'port': 8193, 'timeout': 3, 'groups': ['fast']}
-    result = subprocess.run([dotnet, str(worker)], input=(json.dumps(request) + '\n') * 7,
+    result = subprocess.run([dotnet, str(worker)], input=(json.dumps(request) + '\n') * 13,
                             text=True, capture_output=True, timeout=15,
                             env={**os.environ, 'FOCAS_LIBRARY_PATH': str(library)})
     assert result.returncode == 0, result.stderr
     responses = [json.loads(line) for line in result.stdout.splitlines()]
-    assert [r['signals']['raw_emergency_code']['value'] for r in responses] == [0,2,0,1,0,3,9]
+    assert [r['signals']['raw_emergency_code']['value'] for r in responses] == [0,2,0,1,0,3,9,0,0,0,0,0,0]
     assert [r['signals']['emergency_stop']['value'] for r in responses[:6]] == [False,False,False,True,False,False]
     assert 'emergency_stop' not in responses[6]['signals']
     assert responses[6]['unsupported']['cnc_statinfo.emergency']['code'] == 9
+    assert [r['signals']['alarm_active']['value'] for r in responses[:9]] == [False,True,False,True,False,False,False,False,True]
+    assert 'alarm_active' not in responses[9]['signals']
+    assert responses[9]['signals']['alarm_status']['value'] == 'UNKNOWN'
+    assert responses[2]['signals']['alarm_status']['value'] == 'BATTERY_LOW'
+    assert [r['signals']['mode']['value'] for r in responses] == ['MDI','AUTOMATIC','UNSELECTED','EDIT','HANDLE','JOG','TEACH_JOG','TEACH_HANDLE','INCREMENTAL_FEED','REFERENCE','AUTOMATIC','TEST','UNKNOWN']
+    assert [r['signals']['execution']['value'] for r in responses[:6]] == ['RESET','STOPPED','FEED_HOLD','ACTIVE','MSTR','UNKNOWN']
 
 
 def test_native_session_reuse_failure_reconnect_and_eof(tmp_path):
@@ -96,38 +102,80 @@ short cnc_rdopmsg() { return 6; }
         "open", "read", "close", "open", "read", "close", "exit"]
 
 
+MULTISPINDLE_LIBRARY = r'''
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <string.h>
+static int messages, overrides;
+static int audit(const char *name){const char *value=getenv("AUDIT_CASE");return value && strcmp(value,name)==0;}
+static void log_event(const char *event) { FILE *f=fopen(getenv("SESSION_TRACE"),"a");fprintf(f,"%s\n",event);fclose(f); }
+short cnc_startupprocess(){return 0;}
+short cnc_exitprocess(){return 0;}
+short cnc_allclibhndl3(const char *host,unsigned short port,int timeout,unsigned short *h){*h=0;log_event("open");return 0;}
+short cnc_freelibhndl(){log_event("close");return 0;}
+short cnc_sysinfo(unsigned short h,void *p){memset(p,0,18);memcpy((char*)p+4,audit("series15")?"15":"0 ",2);*(short*)p=audit("unqualified_model")?2:1026;memcpy((char*)p+16," 2",2);memcpy((char*)p+6,"MT",2);log_event("identity");return 0;}
+short cnc_statinfo(unsigned short h,void *p){log_event("status");memset(p,0,18);return 0;}
+short cnc_rdspeed(unsigned short h,short type,void *p){memset(p,0,24);*(int*)((char*)p+12)=1800;*(short*)((char*)p+18)=audit("bad_units")?99:2; *(short*)((char*)p+6)=audit("bad_units")?99:0;return 0;}
+short cnc_acts2(unsigned short h,short spindle,void *p){memset(p,0,20);*(short*)p=spindle;*(int*)((char*)p+4)=spindle==1?0:2400;log_event(spindle==1?"rpm1":"rpm2");return 0;}
+short cnc_rdspmeter(unsigned short h,short type,short *n,void *p){*n=2;memset(p,0,96);if(audit("bad_units"))((short*)p)[3]=1;return 0;}
+short cnc_rdsvmeter(unsigned short h,short *n,void *p){*n=2;memset(p,0,96);((char*)p)[8]='X';((char*)p)[20]='Z';if(audit("bad_units"))((short*)p)[3]=1;return 0;}
+short cnc_rdprgnum(unsigned short h,void *p){log_event("program");memset(p,0,8);((short*)p)[2]=audit("negative_program")?-1:53;((short*)p)[3]=1234;return 0;}
+short cnc_rdprogdir3(){return 6;}
+short cnc_modal(unsigned short h,short number,short block,void *p){memset(p,0,12);*(int*)((char*)p+4)=303;return 0;}
+short pmc_rdpmcrng(unsigned short h,short area,short type,unsigned short start,unsigned short end,unsigned short length,void *p){if(area!=0||type!=0||start!=12||end!=12||length!=9)return 5;memset(p,0,14);((short*)p)[2]=start;((short*)p)[3]=end;unsigned char raw[]={155,255,105,55,0,135}; int i=overrides++; ((unsigned char*)p)[8]=raw[i%6]; if(i==6)((short*)p)[2]=13; return 0;}
+short cnc_rdalmmsg2(unsigned short h,short type,short *n,void *p){*n=audit("full_alarms")?10:2;memset(p,0,760);((short*)p)[2]=4;((short*)p)[3]=1;((short*)p)[5]=2;memcpy((char*)p+12,"OT",2);((short*)((char*)p+76))[2]=6;((short*)((char*)p+76))[3]=2;return 0;}
+short cnc_rdopmsg(unsigned short h,short type,short length,void *p){memset(p,'X',262);((short*)p)[0]=messages++ ? -1 : 2000;((short*)p)[1]=0;((short*)p)[2]=3;memcpy((char*)p+6,"OK!junk",7);return 0;}
+short cnc_rddiaginfo(unsigned short h,short number,unsigned short n,void *p){memset(p,0,46);((short*)p)[0]=1;((short*)p)[3]=number==309?310:number;((short*)p)[4]=number==403?257:number==4902?387:number==308?5:135;if(audit("axis_scope") && number==308)((short*)p)[4]=1; if(audit("spindle_scope") && number==403)((short*)p)[4]=5; if(audit("unsigned_power") && number==4901)((short*)p)[4]=7; if(audit("signed_temperature") && number==308)((short*)p)[4]=133; return 0;}
+short cnc_diagnoss(unsigned short h,short number,short axis,short length,void *p){memset(p,0,8);*(short*)p=number;((short*)p)[1]=axis;*(int*)((char*)p+4)=number==308?(audit("signed_temperature")?200:0):number==403?55:-500;if(audit("wrong_diagnostic"))*(short*)p=number+1;return 0;}
+'''
+
+
+@pytest.mark.parametrize('case,absent', [
+    ('axis_scope', ['axis_1_motor_temperature']),
+    ('spindle_scope', ['spindle_1_motor_temperature', 'spindle_2_motor_temperature']),
+    ('unsigned_power', ['axis_1_power', 'axis_2_power']),
+    ('signed_temperature', ['axis_1_motor_temperature', 'axis_2_motor_temperature']),
+    ('wrong_diagnostic', ['axis_1_power', 'spindle_1_motor_temperature']),
+    ('bad_units', ['feed_rate', 'spindle_rpm', 'spindle_1_load', 'axis_1_X_load']),
+    ('negative_program', ['program_number', 'main_program_number', 'program_comment']),
+    ('full_alarms', ['axis_2_overtravel']),
+    ('series15', []),
+    ('unqualified_model', ['axis_1_power', 'spindle_1_motor_temperature']),
+])
+def test_invalid_native_metadata_is_not_published_as_measurements(tmp_path, case, absent):
+    dotnet, compiler = shutil.which('dotnet'), shutil.which('cc')
+    worker = Path(__file__).resolve().parents[1] / 'fanuc_monitor/worker/bin/Release/net10.0/Monitor.Worker.dll'
+    if not dotnet or not compiler or not worker.is_file():
+        pytest.skip('Requires built worker and cc')
+    source, library, trace = tmp_path/'fake.c', tmp_path/'fake.so', tmp_path/'trace'
+    source.write_text(MULTISPINDLE_LIBRARY)
+    subprocess.run([compiler, '-shared', '-fPIC', str(source), '-o', str(library)], check=True)
+    request = {'host':'192.0.2.1', 'port':8193, 'timeout':3}
+    result = subprocess.run([dotnet, str(worker)], input=json.dumps(request)+'\n',
+                            text=True, capture_output=True, timeout=15,
+                            env={**os.environ, 'FOCAS_LIBRARY_PATH':str(library),
+                                 'SESSION_TRACE':str(trace), 'AUDIT_CASE':case})
+    assert result.returncode == 0, result.stderr
+    response = json.loads(result.stdout)
+    if case == 'series15':
+        assert 'error' in response and 'signals' not in response
+        assert 'status' not in trace.read_text().splitlines()
+        return
+    assert response['unsupported']
+    for name in absent:
+        assert name not in response['signals'], (case, name)
+    if case == 'full_alarms':
+        assert response['signals']['axis_1_overtravel']['value'] is True
+
+
 def test_native_groups_multi_spindle_and_validated_diagnostics(tmp_path):
     dotnet,compiler=shutil.which('dotnet'),shutil.which('cc')
     worker=Path(__file__).resolve().parents[1]/'fanuc_monitor/worker/bin/Release/net10.0/Monitor.Worker.dll'
     if not dotnet or not compiler or not worker.is_file():
         pytest.skip('Requires built worker and cc')
     source=tmp_path/'fake.c'; trace=tmp_path/'trace'
-    source.write_text(r'''
-#include <stdio.h>
-#include <stdlib.h>
-#include <stdint.h>
-#include <string.h>
-static int messages, overrides;
-static void log_event(const char *event) { FILE *f=fopen(getenv("SESSION_TRACE"),"a");fprintf(f,"%s\n",event);fclose(f); }
-short cnc_startupprocess(){return 0;}
-short cnc_exitprocess(){return 0;}
-short cnc_allclibhndl3(const char *host,unsigned short port,int timeout,unsigned short *h){*h=0;log_event("open");return 0;}
-short cnc_freelibhndl(){log_event("close");return 0;}
-short cnc_sysinfo(unsigned short h,void *p){memset(p,0,18);memcpy((char*)p+4,"0 ",2);*(short*)p=2;memcpy((char*)p+16," 2",2);memcpy((char*)p+6,"MT",2);log_event("identity");return 0;}
-short cnc_statinfo(unsigned short h,void *p){memset(p,0,18);return 0;}
-short cnc_rdspeed(unsigned short h,short type,void *p){memset(p,0,24);*(int*)((char*)p+12)=1800;*(short*)((char*)p+18)=2;return 0;}
-short cnc_acts2(unsigned short h,short spindle,void *p){memset(p,0,20);*(short*)p=spindle;*(int*)((char*)p+4)=spindle==1?0:2400;log_event(spindle==1?"rpm1":"rpm2");return 0;}
-short cnc_rdspmeter(unsigned short h,short type,short *n,void *p){*n=2;memset(p,0,96);return 0;}
-short cnc_rdsvmeter(unsigned short h,short *n,void *p){*n=2;memset(p,0,96);((char*)p)[8]='X';((char*)p)[20]='Z';return 0;}
-short cnc_rdprgnum(unsigned short h,void *p){log_event("program");memset(p,0,8);((short*)p)[2]=53;((short*)p)[3]=1234;return 0;}
-short cnc_rdprogdir3(){return 6;}
-short cnc_modal(unsigned short h,short number,short block,void *p){memset(p,0,12);*(int*)((char*)p+4)=303;return 0;}
-short pmc_rdpmcrng(unsigned short h,short area,short type,unsigned short start,unsigned short end,unsigned short length,void *p){if(area!=0||type!=0||start!=12||end!=12||length!=9)return 5;memset(p,0,14);((short*)p)[2]=start;((short*)p)[3]=end;unsigned char raw[]={155,255,105,55,0,135}; int i=overrides++; ((unsigned char*)p)[8]=raw[i%6]; if(i==6)((short*)p)[2]=13; return 0;}
-short cnc_rdalmmsg2(unsigned short h,short type,short *n,void *p){*n=2;memset(p,0,760);((short*)p)[2]=4;((short*)p)[3]=1;((short*)p)[5]=2;memcpy((char*)p+12,"OT",2);((short*)((char*)p+76))[2]=6;((short*)((char*)p+76))[3]=2;return 0;}
-short cnc_rdopmsg(unsigned short h,short type,short length,void *p){memset(p,'X',262);((short*)p)[0]=messages++ ? -1 : 2000;((short*)p)[1]=0;((short*)p)[2]=3;memcpy((char*)p+6,"OK!junk",7);return 0;}
-short cnc_rddiaginfo(unsigned short h,short number,unsigned short n,void *p){memset(p,0,46);((short*)p)[0]=1;((short*)p)[3]=number==309?310:number;((short*)p)[4]=(number==308||number==403)?5:135;return 0;}
-short cnc_diagnoss(unsigned short h,short number,short axis,short length,void *p){memset(p,0,8);*(short*)p=number;((short*)p)[1]=axis;*(int*)((char*)p+4)=number==308?0:number==403?55:-500;return 0;}
-''')
+    source.write_text(MULTISPINDLE_LIBRARY)
     library=tmp_path/'fake.so'
     subprocess.run([compiler,'-shared','-fPIC',str(source),'-o',str(library)],check=True)
     endpoint={'host':'192.0.2.1','port':8193,'timeout':3}

@@ -3,7 +3,10 @@
 ## Unreleased
 
 - Fix false emergency-stop events during CNC RESET: only status code 1 asserts E-stop.
-- Add the raw emergency-status diagnostic code; reject unknown codes instead of guessing a state.
+- Add raw emergency/alarm status and explicit alarm classification; separate warnings from alarms.
+- Map execution RESET/MSTR and manual/test modes explicitly.
+- Validate measurement units, diagnostic sign/scope/response metadata and controller family/model qualification.
+- Withhold unconfirmed overtravel when the alarm buffer is full; reject invalid program numbers and unsupported Series 15 status ABI.
 
 ## 0.3.1
 

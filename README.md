@@ -92,6 +92,7 @@ in add-on backups.
 
 See [configuration and troubleshooting](fanuc_monitor/DOCS.md),
 [architecture and safety](docs/architecture.md),
+[FOCAS mapping audit](docs/focas-mapping-audit.md),
 [validation and remaining hardware checks](docs/validation.md), and
 [development](docs/development.md).
 

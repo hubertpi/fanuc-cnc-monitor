@@ -10,6 +10,7 @@ internal static class Program
     static object? cachedController;
     static string machineType = "";
     static int spindleCount;
+    static bool maintenanceSupported;
     static Dictionary<int, short> diagnosticTypes = new();
     static string Text(char[] value) => new string(value ?? Array.Empty<char>()).Trim('\0', ' ');
     internal static string FormatTool(int number, string type) => "T" + number.ToString(
@@ -59,7 +60,7 @@ internal static class Program
         {
             if (endpoint is null) return;
             endpoint = null;
-            cachedController = null; machineType = ""; spindleCount = 0; diagnosticTypes.Clear();
+            cachedController = null; machineType = ""; spindleCount = 0; maintenanceSupported = false; diagnosticTypes.Clear();
             release(handle);
         }
     }
@@ -109,9 +110,13 @@ internal static class Program
             {
                 Require(Focas.cnc_sysinfo(handle, system), "cnc_sysinfo");
                 string family = Text(system.cnc_type) + (((system.addinfo & 2) != 0) ? "i" : "");
+                // Series 15/15i require a different ODBST layout; never call with this buffer.
+                if (Text(system.cnc_type) == "15") throw new UnsupportedControllerException("Series 15/15i uses a different status layout and is not supported by this worker");
                 machineType = Text(system.mt_type);
+                int controllerModel = (system.addinfo >> 8) & 255;
+                maintenanceSupported = family == "30i" || (family == "0i" && controllerModel is 4 or 6);
                 cachedController = new {series = family, firmware_series = Text(system.series), version = Text(system.version),
-                    type = Text(system.mt_type), axes = Text(system.axes), model = "Fanuc " + family,
+                    type = Text(system.mt_type), axes = Text(system.axes), model = "Fanuc " + family, model_code = controllerModel,
                     path_scope = "Default FOCAS path"};
             }
             string group = "fast";
@@ -127,20 +132,28 @@ internal static class Program
             Add("raw_mode_code", state.aut, "cnc_statinfo.aut");
             // Derived labels intentionally describe the raw status, without the
             // upstream controller-specific modal/PMC assumptions.
-            Add("execution", state.run switch {0 => "READY", 1 => "STOPPED", 2 => "FEED_HOLD", 3 => "ACTIVE", _ => "UNKNOWN"}, "cnc_statinfo.run");
-            Add("mode", state.aut switch {0 => "MDI", 1 or 10 => "AUTOMATIC", 3 => "EDIT", _ => "MANUAL_OR_UNKNOWN"}, "cnc_statinfo.aut");
+            Add("execution", state.run switch {0 => "RESET", 1 => "STOPPED", 2 => "FEED_HOLD", 3 => "ACTIVE", 4 => "MSTR", _ => "UNKNOWN"}, "cnc_statinfo.run");
+            Add("mode", state.aut switch {0 => "MDI", 1 or 10 => "AUTOMATIC", 2 => "UNSELECTED", 3 => "EDIT", 4 => "HANDLE", 5 => "JOG", 6 => "TEACH_JOG", 7 => "TEACH_HANDLE", 8 => "INCREMENTAL_FEED", 9 => "REFERENCE", 11 => "TEST", _ => "UNKNOWN"}, "cnc_statinfo.aut");
             Add("raw_emergency_code", state.emergency, "cnc_statinfo.emergency");
             // This is an enum, not a boolean: 2 is RESET, 3 is WAIT (FS35i).
             // Only 1 means emergency stop. Do not invent a state for unknown codes.
             if (state.emergency is 0 or 1 or 2 or 3)
                 Add("emergency_stop", state.emergency == 1, "cnc_statinfo.emergency", kind: "binary_sensor");
             else unsupported["cnc_statinfo.emergency"] = new {error="Unrecognized emergency status", code=state.emergency};
-            Add("alarm_active", state.alarm != 0, "cnc_statinfo.alarm", kind: "binary_sensor");
+            Add("raw_alarm_code", state.alarm, "cnc_statinfo.alarm");
+            Add("alarm_status", state.alarm switch {0 => "NONE", 1 => "ALARM", 2 => "BATTERY_LOW", 3 => "FAN_ALARM", 4 => "PS_WARNING", 5 => "FSSB_WARNING", 6 => "INSULATION_WARNING", 7 => "ENCODER_WARNING", 8 => "PMC_ALARM", _ => "UNKNOWN"}, "cnc_statinfo.alarm");
+            if (state.alarm is >= 0 and <= 8)
+                Add("alarm_active", state.alarm is 1 or 3 or 8, "cnc_statinfo.alarm", kind: "binary_sensor");
+            else unsupported["cnc_statinfo.alarm"] = new {error="Unrecognized alarm status", code=state.alarm};
             var speed = new Focas.ODBSPEED();
             if (Optional(() => Focas.cnc_rdspeed(handle, -1, speed), "cnc_rdspeed", unsupported))
             {
-                Add("feed_rate", Scale(speed.actf.data, speed.actf.dec), "cnc_rdspeed.actf", SpeedUnit(speed.actf.unit));
-                Add("spindle_rpm", Scale(speed.acts.data, speed.acts.dec), "cnc_rdspeed.acts", SpeedUnit(speed.acts.unit));
+                if (speed.actf.unit is 0 or 1 or 3 or 4)
+                    Add("feed_rate", Scale(speed.actf.data, speed.actf.dec), "cnc_rdspeed.actf", SpeedUnit(speed.actf.unit));
+                else unsupported["cnc_rdspeed.actf"] = new {error="Invalid feedrate unit", code=speed.actf.unit};
+                if (speed.acts.unit == 2)
+                    Add("spindle_rpm", Scale(speed.acts.data, speed.acts.dec), "cnc_rdspeed.acts", "rpm");
+                else unsupported["cnc_rdspeed.acts"] = new {error="Invalid spindle speed unit", code=speed.acts.unit};
                 Add("raw_feed_unit_code", speed.actf.unit, "cnc_rdspeed.actf.unit");
             }
             // Specified-spindle reads avoid the pinned ABI's four-element array
@@ -165,7 +178,9 @@ internal static class Program
                 for (int index = 1; index <= spindleCount; index++)
                 {
                     var data = (Focas.ODBSPLOAD_data)typeof(Focas.ODBSPLOAD).GetField("spload" + index)!.GetValue(spindle)!;
-                    Add("spindle_" + index + "_load", Scale(data.spload.data, data.spload.dec), "cnc_rdspmeter." + index, LoadUnit(data.spload.unit));
+                    if (data.spload.unit == 0)
+                        Add("spindle_" + index + "_load", Scale(data.spload.data, data.spload.dec), "cnc_rdspmeter." + index, "%");
+                    else unsupported["cnc_rdspmeter."+index] = new {error="Invalid spindle load unit", code=data.spload.unit};
                 }
             }
             var axes = new Focas.ODBSVLOAD(); short axisCount = 8;
@@ -176,7 +191,9 @@ internal static class Program
                     var data = (Focas.LOADELM)typeof(Focas.ODBSVLOAD).GetField("svload" + index)!.GetValue(axes)!;
                     string name = data.name >= 32 && data.name < 127 ? ((char)data.name).ToString() : index.ToString();
                     // Include index in identity to disambiguate duplicate axis names.
-                    Add("axis_" + index + "_" + name + "_load", Scale(data.data, data.dec), "cnc_rdsvmeter." + index, LoadUnit(data.unit));
+                    if (data.unit == 0)
+                        Add("axis_" + index + "_" + name + "_load", Scale(data.data, data.dec), "cnc_rdsvmeter." + index, "%");
+                    else unsupported["cnc_rdsvmeter."+index] = new {error="Invalid servo load unit", code=data.unit};
                 }
             }
             var modal = new Focas.ODBMDL_3();
@@ -221,7 +238,11 @@ internal static class Program
                         .Any(a => a.type == 4 && a.axis == axis);
                     // Publish axis conditions only for axes actually reported by the load read.
                     if (signals.Keys.Any(k => k.StartsWith("axis_"+axis+"_")))
-                        Add("axis_"+axis+"_overtravel", overtravel, "cnc_rdalmmsg2.OT", kind:"binary_sensor");
+                    {
+                        if (overtravel || alarmCount < 10)
+                            Add("axis_"+axis+"_overtravel", overtravel, "cnc_rdalmmsg2.OT", kind:"binary_sensor");
+                        else unsupported["cnc_rdalmmsg2.OT."+axis] = new {error="Full alarm buffer cannot confirm absence of overtravel"};
+                    }
                 }
                 Add("raw_alarm_buffer_full", alarmCount == 10, "cnc_rdalmmsg2.count", kind: "binary_sensor");
             }
@@ -241,20 +262,23 @@ internal static class Program
             var program = new Focas.ODBPRO();
             if (Optional(() => Focas.cnc_rdprgnum(handle, program), "cnc_rdprgnum", unsupported))
             {
+                if (program.data < 0 || program.mdata < 0)
+                    unsupported["cnc_rdprgnum"] = new {error="Invalid program number in four-digit ABI"};
+                else
+                {
                 Add("program_number", FormatProgram(program.data), "cnc_rdprgnum.data");
                 Add("main_program_number", FormatProgram(program.mdata), "cnc_rdprgnum.mdata");
                 int number = program.data; short count = 1; var directory = new Focas.PRGDIR3();
                 if (Optional(() => Focas.cnc_rdprogdir3(handle, 2, ref number, ref count, directory), "cnc_rdprogdir3", unsupported) && count > 0 && directory.dir1.number == program.data)
                     Add("program_comment", directory.dir1.comment.Trim('\0', ' '), "cnc_rdprogdir3.comment");
+                }
             }
 
                 // Fixed maintenance mappings only. Verify existence and layout with
                 // the controller before reading; do not manufacture empty entities.
-                bool modern = JsonSerializer.Serialize(cachedController).Contains("\"series\":\"0i\"")
-                    || JsonSerializer.Serialize(cachedController).Contains("\"series\":\"30i\"");
-                if (modern)
+                if (maintenanceSupported)
                 {
-                    void Diagnostic(short number, short axis, string name, int expectedType, string unit, int minimum, int maximum)
+                    void Diagnostic(short number, short axis, string name, int expectedType, string unit, int minimum, int maximum, bool spindleDiagnostic=false)
                     {
                         string source = "cnc_diagnoss."+number+"."+axis;
                         if (!diagnosticTypes.TryGetValue(number, out short attribute))
@@ -264,12 +288,18 @@ internal static class Program
                             if (info.info_no != 1 || info.info.info1.diag_no != number) { unsupported[source] = new {error="Diagnostic is not present"}; return; }
                             attribute = info.info.info1.diag_type; diagnosticTypes[number] = attribute;
                         }
-                        if ((attribute & 3) != expectedType || (attribute & (8|4096)) != 0)
+                        if ((attribute & 3) != expectedType || (attribute & (8|4096)) != 0
+                            || (spindleDiagnostic ? (attribute & 256) == 0 : (attribute & 4) == 0 || (attribute & 256) != 0))
                         { unsupported[source] = new {error="Diagnostic type does not match maintenance mapping"}; return; }
                         var data = new Focas.ODBDGN_1();
                         short length = (short)(4 + (expectedType == 1 ? 1 : expectedType == 2 ? 2 : 4));
                         if (!Optional(() => Focas.cnc_diagnoss(handle, number, axis, length, data), source, unsupported)) return;
-                        int value = expectedType == 1 ? data.cdata : expectedType == 2 ? data.idata : data.ldata;
+                        if (data.datano != number || (data.type & 255) != axis)
+                        { unsupported[source] = new {error="Diagnostic response number/axis does not match request"}; return; }
+                        bool signed = (attribute & 128) != 0;
+                        long value = expectedType == 1 ? (signed ? (sbyte)data.cdata : data.cdata)
+                            : expectedType == 2 ? (signed ? data.idata : (ushort)data.idata)
+                            : signed ? data.ldata : (long)(uint)data.ldata;
                         if (value < minimum || value > maximum) { unsupported[source] = new {error="Diagnostic value outside validated range"}; return; }
                         if (unit == "°C" && value == 0)
                         {
@@ -288,11 +318,13 @@ internal static class Program
                     }
                     for (short spindle=1; spindle<=spindleCount; spindle++)
                     {
-                        Diagnostic(403,spindle,"spindle_"+spindle+"_motor_temperature",1,"°C",0,255);
-                        Diagnostic(4902,spindle,"spindle_"+spindle+"_power",3,"W",-99999999,99999999);
+                        Diagnostic(403,spindle,"spindle_"+spindle+"_motor_temperature",1,"°C",0,255,spindleDiagnostic:true);
+                        Diagnostic(4902,spindle,"spindle_"+spindle+"_power",3,"W",-99999999,99999999,spindleDiagnostic:true);
                     }
                 }
             }
+            if (groups.Contains("slow") && !maintenanceSupported)
+                unsupported["cnc_diagnoss.mapping"] = new {error="Maintenance mappings require 0i-D/F or 30i controller identification"};
             return new {controller = cachedController, signals, unsupported, simulation = false};
         }
         catch { session.Dispose(); throw; }
@@ -340,6 +372,7 @@ internal static class Program
             while ((line = Console.ReadLine()) != null)
             {
                 try { using var request = JsonDocument.Parse(line); Console.WriteLine(JsonSerializer.Serialize(Read(request.RootElement, session))); }
+                catch (UnsupportedControllerException error) { Console.WriteLine(JsonSerializer.Serialize(new {error = error.Message})); }
                 catch (FocasError error) { Console.WriteLine(JsonSerializer.Serialize(new {error = error.Message, code = error.Code})); }
                 catch (Exception) { Console.WriteLine("{\"error\":\"Invalid native data or unavailable FOCAS read entry point\"}"); }
             }
@@ -348,6 +381,7 @@ internal static class Program
         finally { try { session.Dispose(); } finally { if (started) Focas.cnc_exitprocess(); } }
         return 0;
     }
+    sealed class UnsupportedControllerException(string message) : Exception(message);
     sealed class FocasError(string function, short code) : Exception($"{function}: {((Focas.focas_ret)code)} ({code})")
     {
         public short Code { get; } = code;

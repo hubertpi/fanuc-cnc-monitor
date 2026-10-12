@@ -60,6 +60,10 @@ removed shift entities are removed from MQTT discovery.
 - Emergency stop is ON only for `cnc_statinfo.emergency == 1`. Code 2 is RESET,
   not E-stop; code 3 is WAIT on FS35i. The raw emergency code is available as a
   diagnostic sensor. Unknown codes are reported as unsupported.
+- Alarm-active includes alarm, fan-alarm and PMC-alarm statuses; battery and other
+  warnings are separately named in Alarm Status, with raw codes in diagnostics.
+  Execution RESET and MSTR are not ordinary ACTIVE production. Manual/test modes
+  are named individually; unknown values are not guessed.
 - Individual `spindle_N_rpm` entities use specified-spindle `cnc_acts2` reads.
   The CNC-selected `spindle_rpm` entity is a fallback only; it is removed when
   numbered RPM reads succeed, including valid zero RPM.
@@ -68,12 +72,18 @@ removed shift entities are removed from MQTT discovery.
   responses create no percent sensor. Confirm against the actual override knob.
 - `tool_code` preserves the modal T code: T/TT/MT controllers use at least four
   digits, M/MM at least two, and unknown types retain their full reported code
-  with a T prefix. Lathe codes can contain tool and offset; separate mill offsets
-  are not synthesized. Program numbers have an O prefix and at least four digits.
+  with a T prefix. This is the T command, not physical installed-tool confirmation.
+  Lathe codes can contain tool and offset; separate mill offsets
+  are not synthesized. Program numbers have an O prefix and at least four digits;
+  the current native interface supports four-digit program numbers. Series 15/15i
+  controllers use a different status ABI and are not supported.
 - Axis overtravel derives from axis-qualified OT alarms, not generic alarm presence.
+  A full alarm buffer cannot confirm absence of OT on an unlisted axis.
 - Temperature mappings: diagnostic 308 motor, 309 encoder, 403 spindle motor.
   Power mappings: 4901 servo, 4902 spindle. Diagnostic existence and data type are
-  checked before reading. Zero-only temperature entities are suppressed; previously
+  checked before reading. Signedness, axis/spindle scope and returned diagnosis
+  number/index must match. Maintenance reads require identified 0i-D/F or 30i;
+  an unreported 0i model does not qualify. Zero-only temperature entities are suppressed; previously
   validated temperatures become unavailable on 0°C. Other measurement zeros remain
   valid. Confirm meanings/units against the controller manual.
 - Unsupported readings create no placeholders. Failed optional readings are removed

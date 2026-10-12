@@ -26,7 +26,7 @@ class Simulator:
         result = {"controller": {"series": "0i", "version": "SIM", "type": "T", "axes": 2,
                                "model": "Simulated Fanuc 0i-T", "simulation": True},
                 "signals": {
-                    "execution": signal("ACTIVE" if tick % 20 < 15 else "READY", "cnc_statinfo.run"),
+                    "execution": signal("ACTIVE" if tick % 20 < 15 else "RESET", "cnc_statinfo.run"),
                     "mode": signal("AUTOMATIC", "cnc_statinfo.aut"),
                     "spindle_rpm": signal(1200 + tick % 40, "cnc_rdspeed.acts", unit="rpm"),
                     "spindle_load": signal(36, "cnc_rdspmeter.load", unit="%"),
