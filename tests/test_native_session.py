@@ -8,6 +8,37 @@ import subprocess
 import pytest
 
 
+def test_emergency_stop_enum_reset_wait_and_unknown_are_not_emergency(tmp_path):
+    dotnet, compiler = shutil.which('dotnet'), shutil.which('cc')
+    worker = Path(__file__).resolve().parents[1] / 'fanuc_monitor/worker/bin/Release/net10.0/Monitor.Worker.dll'
+    if not dotnet or not compiler or not worker.is_file():
+        pytest.skip('Requires built worker and cc')
+    source = tmp_path / 'fake.c'
+    source.write_text(r'''
+#include <string.h>
+static int reads;
+short cnc_startupprocess(){return 0;}
+short cnc_exitprocess(){return 0;}
+short cnc_allclibhndl3(const char *host,unsigned short port,int timeout,unsigned short *h){*h=0;return 0;}
+short cnc_freelibhndl(){return 0;}
+short cnc_sysinfo(unsigned short h,void *p){memset(p,0,18);return 0;}
+short cnc_statinfo(unsigned short h,void *p){short values[]={0,2,0,1,0,3,9};memset(p,0,18);((short*)p)[6]=values[reads++];return 0;}
+short cnc_rdspeed(){return 6;}
+''')
+    library = tmp_path / 'fake.so'
+    subprocess.run([compiler, '-shared', '-fPIC', str(source), '-o', str(library)], check=True)
+    request = {'host': '192.0.2.1', 'port': 8193, 'timeout': 3, 'groups': ['fast']}
+    result = subprocess.run([dotnet, str(worker)], input=(json.dumps(request) + '\n') * 7,
+                            text=True, capture_output=True, timeout=15,
+                            env={**os.environ, 'FOCAS_LIBRARY_PATH': str(library)})
+    assert result.returncode == 0, result.stderr
+    responses = [json.loads(line) for line in result.stdout.splitlines()]
+    assert [r['signals']['raw_emergency_code']['value'] for r in responses] == [0,2,0,1,0,3,9]
+    assert [r['signals']['emergency_stop']['value'] for r in responses[:6]] == [False,False,False,True,False,False]
+    assert 'emergency_stop' not in responses[6]['signals']
+    assert responses[6]['unsupported']['cnc_statinfo.emergency']['code'] == 9
+
+
 def test_native_session_reuse_failure_reconnect_and_eof(tmp_path):
     dotnet, compiler = shutil.which("dotnet"), shutil.which("cc")
     worker = Path(__file__).resolve().parents[1] / "fanuc_monitor/worker/bin/Release/net10.0/Monitor.Worker.dll"

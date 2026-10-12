@@ -187,7 +187,7 @@ class Manager:
                         due[group] = max(started+rates[group], finished+0.01)
                     now = utc()
                     def source_group(source):
-                        if source.startswith(("cnc_rdspeed","cnc_acts2")): return "fast"
+                        if source.startswith(("cnc_statinfo","cnc_rdspeed","cnc_acts2")): return "fast"
                         if source.startswith(("cnc_sysinfo","cnc_rdprgnum","cnc_rdprogdir3","cnc_diagnoss","cnc_rddiaginfo")): return "slow"
                         return "status"
                     for source in list(unsupported):

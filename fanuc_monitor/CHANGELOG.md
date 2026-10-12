@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Fix false emergency-stop events during CNC RESET: only status code 1 asserts E-stop.
+- Add the raw emergency-status diagnostic code; reject unknown codes instead of guessing a state.
+
 ## 0.3.1
 
 - Read feed override from the fixed, read-only PMC G12 byte; preserve genuine 0% and overrides above 100%.

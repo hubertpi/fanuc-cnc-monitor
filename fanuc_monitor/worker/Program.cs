@@ -129,7 +129,12 @@ internal static class Program
             // upstream controller-specific modal/PMC assumptions.
             Add("execution", state.run switch {0 => "READY", 1 => "STOPPED", 2 => "FEED_HOLD", 3 => "ACTIVE", _ => "UNKNOWN"}, "cnc_statinfo.run");
             Add("mode", state.aut switch {0 => "MDI", 1 or 10 => "AUTOMATIC", 3 => "EDIT", _ => "MANUAL_OR_UNKNOWN"}, "cnc_statinfo.aut");
-            Add("emergency_stop", state.emergency != 0, "cnc_statinfo.emergency", kind: "binary_sensor");
+            Add("raw_emergency_code", state.emergency, "cnc_statinfo.emergency");
+            // This is an enum, not a boolean: 2 is RESET, 3 is WAIT (FS35i).
+            // Only 1 means emergency stop. Do not invent a state for unknown codes.
+            if (state.emergency is 0 or 1 or 2 or 3)
+                Add("emergency_stop", state.emergency == 1, "cnc_statinfo.emergency", kind: "binary_sensor");
+            else unsupported["cnc_statinfo.emergency"] = new {error="Unrecognized emergency status", code=state.emergency};
             Add("alarm_active", state.alarm != 0, "cnc_statinfo.alarm", kind: "binary_sensor");
             var speed = new Focas.ODBSPEED();
             if (Optional(() => Focas.cnc_rdspeed(handle, -1, speed), "cnc_rdspeed", unsupported))

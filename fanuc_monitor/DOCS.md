@@ -57,6 +57,9 @@ removed shift entities are removed from MQTT discovery.
 
 ## Reading interpretation
 
+- Emergency stop is ON only for `cnc_statinfo.emergency == 1`. Code 2 is RESET,
+  not E-stop; code 3 is WAIT on FS35i. The raw emergency code is available as a
+  diagnostic sensor. Unknown codes are reported as unsupported.
 - Individual `spindle_N_rpm` entities use specified-spindle `cnc_acts2` reads.
   The CNC-selected `spindle_rpm` entity is a fallback only; it is removed when
   numbered RPM reads succeed, including valid zero RPM.
