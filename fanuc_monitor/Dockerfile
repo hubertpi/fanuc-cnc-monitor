@@ -11,7 +11,7 @@ RUN --network=none python3 worker/prepare_binding.py \
     && dotnet /published/Monitor.Worker.dll --self-test
 
 FROM mcr.microsoft.com/dotnet/runtime@sha256:5b280fe869ce058778531aa13d9a3ddf1efa0e889524904753da6fc48aada91e
-ARG BUILD_VERSION=0.3.1
+ARG BUILD_VERSION=0.3.2
 LABEL org.opencontainers.image.source="https://github.com/hubertpi/fanuc-cnc-monitor"
 LABEL io.hass.version="${BUILD_VERSION}" io.hass.type="app" io.hass.arch="amd64"
 RUN sed -i -E 's#https?://(archive|security)\.ubuntu\.com/ubuntu/?#https://snapshot.ubuntu.com/ubuntu/20261009T000000Z/#g' /etc/apt/sources.list.d/ubuntu.sources \

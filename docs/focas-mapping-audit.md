@@ -1,8 +1,7 @@
 # FOCAS mapping audit — October 12, 2026
 
 This audit checks all fourteen imported reads and their derived signals against
-FOCAS documentation. Changes are on the unreleased fix branch; 0.3.1 remains the
-published version. Native fixture tests exercise the actual worker through its C
+FOCAS documentation. Corrections are included in 0.3.2. Native fixture tests exercise the actual worker through its C
 ABI. They do not qualify readings against an installed CNC.
 
 ## Confirmed corrections

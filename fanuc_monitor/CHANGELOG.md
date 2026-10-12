@@ -1,7 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.3.2
 
+- Group percentage sensors under OEE - 24hr, OEE - 1st Shift, OEE - 2nd Shift, OEE - Week and OEE - Month, preserving identities.
 - Fix false emergency-stop events during CNC RESET: only status code 1 asserts E-stop.
 - Add raw emergency/alarm status and explicit alarm classification; separate warnings from alarms.
 - Map execution RESET/MSTR and manual/test modes explicitly.

@@ -1,5 +1,16 @@
 # Validation
 
+## 0.3.2 — October 12, 2026
+
+Local validation: **76 Python tests passed**. The audited worker covers documented
+emergency/alarm/execution/mode codes, signed diagnostic values, axis/spindle scope,
+invalid units/headers, full alarm buffers, unsupported Series 15 layouts, and model
+qualification. OEE display-name migration preserves percentage identities.
+.NET Release build, both worker self-tests and JavaScript syntax checks passed.
+
+The release image is built and validated on the staging branch before promotion
+to main. See [mapping audit](focas-mapping-audit.md) for sources and hardware limits.
+
 ## 0.3.1 — October 12, 2026
 
 Local validation: **65 Python tests passed**, .NET Release build and both worker

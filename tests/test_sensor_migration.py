@@ -39,7 +39,7 @@ def test_oee_names_and_helper_entity_cleanup_preserve_ids(tmp_path):
     stats = Utilization(tmp_path / 'stats.db')
     current = stats.signals('lathe')
     assert {s['label'] for s in current.values()} == {
-        'OEE', 'OEE Week', 'OEE Month', '1st Shift OEE', '2nd Shift OEE'}
+        'OEE - 24hr', 'OEE - Week', 'OEE - Month', 'OEE - 1st Shift', 'OEE - 2nd Shift'}
     assert all(s['unit'] == '%' for s in current.values())
     pub = Publisher(tmp_path)
     machine = {'id': 'lathe', 'name': 'Lathe', 'interval': 1}

@@ -73,8 +73,8 @@ America/Chicago, Monday–Friday:
 The default shifts each have **550 planned minutes** after breaks. Overnight shifts belong to
 their starting workday, including Friday's shift ending Saturday. In-progress
 percentages use elapsed planned time. HA exposes percentage sensors named
-**1st Shift OEE**, **2nd Shift OEE**, **OEE** (rolling 24 hours), **OEE Week** and
-**OEE Month**. Additional configured shifts get their corresponding numbered OEE
+**OEE - 1st Shift**, **OEE - 2nd Shift**, **OEE - 24hr** (rolling 24 hours),
+**OEE - Week** and **OEE - Month**. Additional configured shifts get their corresponding numbered OEE
 sensors. Duration and coverage accounting remain internal and in diagnostic exports;
 obsolete helper entities are removed automatically. Existing entity IDs are preserved.
 Monitoring gaps remain in planned time but add no confirmed production.

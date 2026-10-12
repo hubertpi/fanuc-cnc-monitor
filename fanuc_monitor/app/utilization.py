@@ -179,12 +179,12 @@ class Utilization:
         # HA gets the requested OEE percentages only. Detailed duration/coverage
         # accounting stays internal and is available through diagnostics.
         result = {}
-        labels={"24h":"OEE","week":"OEE Week","month":"OEE Month"}
+        labels={"24h":"OEE - 24hr","week":"OEE - Week","month":"OEE - Month"}
         ordinals={1:"1st",2:"2nd",3:"3rd"}
         for period,values in self.summary(identity,stamp).items():
             if period.startswith("shift_"):
                 number=int(period.split("_")[1])
-                label=ordinals.get(number,str(number)+"th")+" Shift OEE"
+                label="OEE - "+ordinals.get(number,str(number)+"th")+" Shift"
             else: label=labels[period]
             result[f"production_{period}_utilization"] = {"label":label,"value":values["utilization"],"unit":"%","kind":"sensor","source":"monitor.confirmed_feed_utilization","group":"utilization"}
         return result

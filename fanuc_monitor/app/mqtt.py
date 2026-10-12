@@ -216,7 +216,7 @@ class Publisher:
         self.put(self.discovery_topic(identity), {
             "device": {"identifiers": [identity], "name": machine["name"],
                        "manufacturer": "FANUC", "model": controller.get("model", "Fanuc CNC")},
-            "origin": {"name": "Fanuc CNC Monitor", "sw_version": "0.3.1"},
+            "origin": {"name": "Fanuc CNC Monitor", "sw_version": "0.3.2"},
             "components": components,
         })
         expected = {root + "/signal/" + key(name) for name in signals}
