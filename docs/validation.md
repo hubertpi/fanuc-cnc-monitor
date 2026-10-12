@@ -1,53 +1,42 @@
-# Validation record
+# Validation
 
-## Persistent sessions — October 12, 2026 (0.1.2-dev)
+## 0.2.0 — October 12, 2026
 
-- Release worker builds with .NET SDK 10.0.401; mapping and session self-tests pass.
-- A fake native library exercises the real worker: successive reads reuse one
-  allocation, unsupported optional groups preserve it, a socket error releases
-  it, a subsequent read reconnects, endpoint changes replace it, and stdin EOF
-  releases the final handle before native process exit. No CNC networking occurs.
-- Real subprocess tests verify cooperative EOF shutdown, worker reuse and forced
-  termination of an unresponsive worker.
-- Full Python suite: 34 tests passed. Real CNC and Supervisor update testing of
-  this version remain pending; the earlier HA validation below used 0.1.0-dev.
+Local validation: **48 Python tests passed**, .NET Release build passed with no
+warnings/errors, and both worker self-tests passed. Checks include:
 
-## Initial validation
+- Python tests for onboarding, stable IDs, partial read groups, boost settings and
+  expiry, bounded discovery/cancellation, shift breaks, overnight ownership,
+  conservative gaps, restart persistence and seven-day retention.
+- A real loopback MQTT broker for retained discovery, HA birth replay, outage,
+  deletion and reconnect. Its outage fixture closes accepted transports and
+  listeners before restarting, fixing an intermittent address-in-use failure.
+- A Release .NET worker build and session/mapping self-tests.
+- The real worker against a fake native library: specified-spindle RPM including
+  valid zero, correct override selector/scaling, message length/clearing, supported
+  diagnostic metadata and signed power, missing-diagnostic suppression, partial
+  fast reads, connection reuse/recovery and EOF cleanup.
+- Native library load and resolution of all 18 allowlisted entry points without
+  allocating a CNC connection.
+- Exact native import/call allowlist checks and JavaScript syntax checks.
 
-October 10, 2026. All HA tests used simulated CNC data; no production equipment.
+These tests validate software behavior. New maintenance mappings, polling rates
+and HA boost controls still need comparison in the user's installed environment.
+GitHub Actions additionally builds the complete Linux image and repeats native
+load checks with networking disabled; consult the workflow for its current result.
 
-Public source snapshot `fe1d4eb` passed [GitHub Actions](https://github.com/hubertpi/fanuc-cnc-monitor/actions/runs/38034117108),
-including Python tests, Linux image build, worker self-test and network-disabled
-native library load/export verification. Adding the public repository URL to
-the isolated Supervisor store installed `8393d05f_fanuc_cnc_monitor` successfully.
-Its Ingress API and automatic MQTT credentials worked, and a new simulator
-created one HA device with 17 live entities. This validates installation from
-GitHub, not only the local development mount.
+## Existing hardware evidence
 
-- 30 Python tests passed, including a real loopback MQTT broker, persistence,
-  MQTT lifecycle, read-only allowlist and native-package integrity checks.
-- Linux amd64 image built and installed by Supervisor 2026.09.3 with HA Core
-  2026.10.0 and Mosquitto 7.1.1 in the isolated official development container.
-- Two simulated machines produced one device and 17 live entities each in HA.
-- Ingress API and automatic Supervisor MQTT credentials worked.
-- Rename/readdress preserved device IDs, entity IDs and unique IDs.
-- Disable/re-enable affected only the selected machine.
-- Add-on, broker and HA restarts restored live states without duplicate entities.
-- Deletion during a broker outage survived a collector restart, removed actual
-  HA devices/entities after reconnection and drained the retained cleanup queue.
-- Connected deletion removed both device and entities.
-- Supervisor partial backup/restore recovered settings after a deliberate edit.
-  Same-version image rebuild preserved settings and identifiers.
-- Bundled FOCAS library loaded and resolved all 15 permitted exports in a Linux
-  container with networking disabled. Native initialization succeeded; an
-  unavailable container-local loopback endpoint returned EW_SOCKET (-16).
+Three real 0i controllers returned system/status/feed/load/program/alarm/message
+readings. Two packet captures on October 12 verified reuse of the recurring TCP
+connection and clean FIN/ACK shutdown when the add-on was stopped. Captured
+traffic was approximately 2 KB/s at the earlier polling configuration. That does
+not measure controller CPU load or qualify the new faster polling configuration.
 
-Reproduce HA lifecycle checks with `tools/ha_acceptance/`; see
-[isolated HA procedure](isolated-ha-test.md). Native source, checksum and revision
-are in `fanuc_monitor/native/provenance.json`. Project development history is
-preserved locally; this public repository starts from the tested source snapshot.
+An earlier isolated Supervisor install verified Ingress, MQTT device creation,
+identity preservation, restart/removal and backup/restore using simulated CNC data.
+That result is installation/lifecycle evidence, not hardware measurement validation.
 
-Pending: real controller ABI/data correctness, hardware soak, controller-specific
-feed/tool interpretation, cross-version migrations and independent retained-topic
-inspection. Public binary redistribution terms remain unverified; its inclusion
-does not assert a new FANUC license grant. See [hardware matrix](hardware-acceptance.md).
+See [controller checks](hardware-acceptance.md) for the remaining comparisons and
+[development](development.md) to reproduce local checks. Native provenance and
+license notices remain in the repository.

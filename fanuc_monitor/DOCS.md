@@ -1,78 +1,91 @@
-# Installation, configuration and diagnostics
+# Configuration and troubleshooting
 
-## Installation
-
-Add `https://github.com/hubertpi/fanuc-cnc-monitor` under the Home Assistant
-app/add-on store's Repositories menu. Install **Fanuc CNC Monitor**, leave the
-defaults in simulation mode, start it, and open its Web UI. Requires Supervisor
-and Linux amd64. HA builds from source; installation can take several minutes.
-
-Install/start Mosquitto in the test HA instance and accept its MQTT integration
-discovery. The monitor obtains broker credentials from Supervisor automatically.
-Use an isolated instance initially. Actual Supervisor install, Ingress API,
-MQTT lifecycle and backup/restore have passed using simulated machines.
-
-## Options
+## Add-on options
 
 | Option | Default | Purpose |
 | --- | --- | --- |
-| mode | simulation | Simulation performs no CNC networking; focas requires hardware gate |
-| hardware_testing_enabled | false | Separate explicit hardware step; never auto-enabled |
-| native_library_sha256 | empty | Empty uses bundled runtime; nonempty selects /share/fanuc override |
-| mqtt_host | empty | Empty uses Supervisor MQTT service discovery |
-| mqtt_port | 1883 | Explicit broker port |
-| mqtt_username/password | empty | Explicit broker credentials; not exposed in diagnostics |
-| mqtt_tls | false | Verify TLS using system trust; no insecure TLS option |
+| mode | simulation | `simulation` makes no CNC connections; `focas` reads real machines |
+| hardware_testing_enabled | false | Required explicitly for FOCAS mode |
+| native_library_sha256 | empty | Empty uses the bundled runtime; nonempty verifies a library override in `/share/fanuc/` |
+| mqtt_host | empty | Empty uses Supervisor's MQTT service |
+| mqtt_port | 1883 | Port for an explicit broker |
+| mqtt_username/password | empty | Credentials for an explicit broker |
+| mqtt_tls | false | TLS with system certificate verification |
 
-Simulation still publishes to the configured MQTT broker. Use an isolated test
-broker and HA instance for validation. The add-on does not require a second
-broker for normal deployment. Supervisor service unavailability is retried;
-manual broker failures use bounded reconnect delay.
+For the Mosquitto add-on, leave the broker fields empty or use `core-mosquitto`.
+Ensure the Home Assistant MQTT integration is configured to see discovered devices.
+Simulation still publishes to MQTT; use a separate test broker when experimenting.
 
-## Machine management
+## Machines and discovery
 
-Enter an IP or DNS name, default FOCAS port 8193, and bounded timeout. Test
-connection, inspect returned controller information, edit the suggested name
-and save. Successful endpoint tests expire after five minutes. Live native
-resolution currently requires IPv4. Per-machine interval is 1–60 integer seconds,
-default 1; actual sweep period includes read time. Edit or disable one machine
-without restarting other collectors. Details show source, units, read timestamps,
-errors, retries, and MQTT acknowledgement. Discovery acknowledgement confirms
-broker delivery, not proof that HA created an entity.
+The scanner checks a user-selected IPv4 subnet, at most /22 (1,024 addresses), with
+16 concurrent TCP probes and a 500 ms timeout. It runs only when requested. An open
+port is a candidate, not proof of a FANUC controller. A successful FOCAS test of the
+exact IP/port/timeout is required before adding or readdressing a machine; the test
+expires after five minutes. IPv4 DNS names and manual/custom-port entry are supported.
 
-In FOCAS mode, each machine keeps its own connection open between successful
-polls. These are repeated requests over a persistent connection, not a stream
-pushed by the CNC. Read failures trigger connection cleanup and the existing
-independent reconnect backoff. Editing, disabling, removing or stopping a machine
-closes its worker and session; a hung worker is forcibly terminated after two
-seconds. Changing a DNS-resolved address also replaces the session on the next read.
+Per-machine settings: fast interval 0.1–60 s (default 0.25), status interval 1–60 s
+(default 1), diagnostic/program interval 5–600 s (default 60), boost fast interval
+0.1–1 s (default 0.1), and boost duration 1–60 min (default 10). During boost, status
+reads use at most 0.5 s and slow reads at most 5 s. HA exposes a boost switch and
+numeric duration/fast-interval settings. These are local scheduler settings only.
+Changing HA numeric settings applies to the next boost. UI edits restart only the
+selected machine's collector and cancel its boost.
 
-Remove requires UI confirmation and queues durable retained-topic tombstones.
-Cleanup completes after broker acknowledgement. Broker outage is not deliberate
-machine removal. Unsupported native groups are shown separately from transport
-failure; raw diagnostic codes are not falsely labeled tool numbers or percent.
+The Details view and diagnostic export include sources, last-read times, units,
+unsupported reads, read duration, errors, reconnect attempts and MQTT acknowledgements.
+MQTT acknowledgement means broker receipt, not proof HA created an entity.
 
-## Hardware step (not authorized or performed)
+## Reading interpretation
 
-Only after explicit authorization, provide the verified CNC FOCAS IPv4/port,
-controller/model/options, segmented network reachability and applicable SDK
-license. The bundled Linux library is selected when the digest option is empty. For
-an override, supply `libfwlib32-linux-x64.so.1.0.5` under `/share/fanuc/`, compute
-its SHA-256 and configure the digest. Select focas mode and enable hardware testing
-only during that agreed step. Missing gate/library, incorrect digest or architecture fails
-closed. There is no fallback that reports simulated reads as real hardware.
-See ../docs/hardware-acceptance.md for the pending matrix.
+- `spindle_rpm` preserves the original CNC-selected spindle reading. Individual
+  `spindle_N_rpm` entities use specified-spindle `cnc_acts2` reads.
+- Feed override selects the documented software-panel field and converts valid
+  codes 0–20 to 0–200%. Unsupported or invalid values create no percent sensor.
+- `tool_code` formats the modal T code with at least four digits. On a lathe it can
+  contain both tool and offset; it is not universally the physical tool number.
+- Axis overtravel derives from axis-qualified OT alarms, not generic alarm presence.
+- Temperature mappings: diagnostic 308 motor, 309 encoder, 403 spindle motor.
+  Power mappings: 4901 servo, 4902 spindle. Diagnostic existence and data type are
+  checked before reading. Confirm meanings/units against the controller manual.
+- Unsupported readings create no placeholders. Failed optional readings are removed
+  until a valid reading returns. Slow readings retain their actual acquisition time.
 
-## Persistence and recovery
+## Persistence and outages
 
-`/data/machines.json` stores schema version 1 and machine UUIDs/revisions.
-`/data/mqtt-journal.json` stores installation identity and desired retained topics.
-Back up and restore these together using the add-on backup mechanism; partial backup/restore
-was verified on isolated Supervisor with simulated machines. Keep IDs during upgrades.
-Unknown/corrupt schema fails closed rather than resetting identities. Offline
-startup clears previous state until fresh reads. Do not manually delete the
-journal to repair a broker issue: that could orphan discovery under old IDs.
+Back up the add-on's `/data` directory as a unit:
 
-Export diagnostics from the UI for errors and timestamps. Diagnostics exclude
-passwords/tokens, but contain machine addresses and observations. Protect backups
-and exports as local operational data. This add-on has no CNC command API.
+- `machines.json`: stable UUIDs, revisions and polling settings.
+- `mqtt-journal.json`: installation identity, latest retained states and cleanup.
+- `utilization.sqlite`, with its SQLite sidecars: minute totals and period counters.
+
+Minute history is pruned to seven days every minute; deleted pages are reused. The database
+stores durations, not raw 100 ms samples. Current shift/week/month counters are small
+fixed records per machine. Counters and the MQTT journal checkpoint every 15 seconds;
+a sudden power loss may lose the latest uncommitted interval, reducing coverage.
+A normal stop flushes them. Do not delete the journal to fix a broker issue: doing so
+can orphan MQTT discovery identities.
+
+HA Core and MQTT are independent of CNC collection. The add-on starts in Supervisor's
+services stage; MQTT availability is retried. Utilization and coverage remain visible during CNC outages; live CNC readings become unavailable.
+Monitoring gaps count as unknown time
+and do not add production. Breaks are excluded from numerator and denominator.
+Rolling 24-hour values have minute-level boundary accuracy. Week/month ownership
+follows the shift start day. Removing a machine also removes its local statistics.
+
+## Common problems
+
+- **No update shown:** refresh the app/add-on store, then reopen the add-on page.
+- **Hardware disabled:** choose `focas`, enable the hardware option and restart.
+- **Connection error:** check the CNC's actual FOCAS IP/port and Ethernet options.
+  An MTConnect agent IP is a different endpoint.
+- **Missing sensors:** inspect unsupported reads. Different CNC models/options
+  provide different functions; a successful connection does not validate every field.
+- **Missing second spindle RPM:** check whether the load read reports that spindle
+  and whether its specified-spindle `cnc_acts2` read succeeds.
+- **Slow responses:** inspect read duration, increase intervals and check for other
+  FOCAS clients. Native requests do not overlap on one CNC.
+- **MQTT offline:** collection continues. Check broker credentials and the HA MQTT
+  integration; latest totals and retained states are republished on recovery.
+
+Diagnostic exports omit broker credentials but contain machine addresses and data.

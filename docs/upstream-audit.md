@@ -52,7 +52,7 @@ with PMC assumptions including G12/G14/G30. Running it unchanged would not
 satisfy the requested narrow native callable boundary or general metric semantics.
 
 This implementation adapts pinned upstream binding definitions, retains only
-15 explicit session/read imports, and runs independently bounded read groups in
+18 explicit session/read imports, and runs independently bounded read groups in
 one .NET worker per machine. It does not run the full Ladder99 driver or claim
 a successful upstream Linux build. This scope reduction still requires native
 ABI and hardware qualification. Paho handles application MQTT independently.

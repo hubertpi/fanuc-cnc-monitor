@@ -81,11 +81,12 @@ def test_bundled_binding_generates_without_network(tmp_path, monkeypatch):
     assert 'extern short cnc_reset(' not in generated
 
 
-def test_no_control_topics_or_code_config():
+def test_only_local_monitor_control_topics_and_no_code_config():
     source = (ROOT / "fanuc_monitor/app/mqtt.py").read_text()
     assert '.subscribe("homeassistant/status"' in source
-    assert source.count(".subscribe(") == 1
-    assert "command_topic" not in source
+    assert source.count(".subscribe(") == 2
+    assert '"/machine/+/monitor/set/+"' in source
+    assert 'settings = {"boost"' in source
     assert "eval(" not in (ROOT / "fanuc_monitor/app/main.py").read_text()
 
 

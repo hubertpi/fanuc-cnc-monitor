@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.0
+
+- Separate 250 ms fast, 1 s status and 60 s diagnostic/program read groups.
+- Add individual spindle RPM, validated feed override and bounded operator messages.
+- Add supported motor/encoder temperatures, motor power and axis overtravel.
+- Add timed diagnostic boost in the UI and local-only HA switch/number controls.
+- Add manual/custom-port onboarding and bounded subnet discovery.
+- Add local shift/24-hour/week/month feed-motion utilization, coverage and unknown time.
+- Handle overnight shifts, weekday schedules and all six scheduled breaks.
+- Retain seven days of minute details and small current-period counters.
+- Continue collecting independently of HA/MQTT; start in Supervisor services stage.
+- Batch persistence, preserve existing machine identities and simplify documentation.
+
+
 ## 0.1.2-dev
 
 - Reuse one FOCAS connection per machine across successful polling sweeps.

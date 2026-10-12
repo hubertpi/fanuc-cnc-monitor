@@ -4,6 +4,7 @@ import json
 import queue
 import ssl
 import uuid
+import time
 from pathlib import Path
 import paho.mqtt.client as mqtt
 from .store import atomic_json
@@ -14,7 +15,9 @@ def key(identity):
 
 
 class Publisher:
-    def __init__(self, directory: Path, broker=None, client=None):
+    def __init__(self, directory: Path, broker=None, client=None, deferred=False):
+        self.deferred, self.needs_flush, self.last_flush = deferred, False, time.monotonic()
+        self.on_control = None
         self.path = directory / "mqtt-journal.json"
         self.journal = json.loads(self.path.read_text()) if self.path.exists() else {
             "version": 1, "installation": str(uuid.uuid4()), "topics": {}}
@@ -33,18 +36,32 @@ class Publisher:
         self.client.will_set(self.online_topic, "offline", qos=1, retain=True)
         self.client.on_connect = self._connect
         self.client.on_disconnect = lambda *args: self.events.put("disconnect")
-        self.client.on_message = lambda c, u, msg: self.events.put("birth") if msg.topic == "homeassistant/status" and msg.payload == b"online" else None
+        self.client.on_message = self._message
         self.client.reconnect_delay_set(1, 60)
         self.client.max_inflight_messages_set(20)
         self.client.max_queued_messages_set(500)
         self.put(self.online_topic, "offline")
+        self.flush()
 
     def _connect(self, client, userdata, flags, reason, properties):
         if reason == 0:
-            client.subscribe("homeassistant/status", qos=1)  # Only HA birth, no commands.
+            client.subscribe("homeassistant/status", qos=1)
+            client.subscribe(self.root + "/machine/+/monitor/set/+", qos=1)  # Local polling settings only.
             self.events.put("connect")
         else:
             self.events.put("connect_error")
+
+    def _message(self, client, userdata, msg):
+        if msg.topic == "homeassistant/status" and msg.payload == b"online":
+            self.events.put("birth")
+        elif not msg.retain and len(msg.payload) <= 32:
+            self.events.put((msg.topic,msg.payload))
+
+    def flush(self):
+        if self.needs_flush:
+            atomic_json(self.path,self.journal)
+            self.needs_flush = False
+            self.last_flush = time.monotonic()
 
     def start(self):
         if not self.broker.get("host"):
@@ -62,7 +79,9 @@ class Publisher:
         if self.journal["topics"].get(topic) != value:
             self.journal["topics"][topic] = value
             self.dirty.add(topic)
-            atomic_json(self.path, self.journal)
+            self.needs_flush = True
+            if not self.deferred:
+                self.flush()
 
     def forget(self, topic):
         # Tombstones persist across broker outages and service restarts.
@@ -71,6 +90,12 @@ class Publisher:
     def pump(self):
         while not self.events.empty():
             event = self.events.get()
+            if isinstance(event,tuple):
+                topic,payload = event
+                parts = topic.removeprefix(self.root+"/machine/").split("/")
+                if len(parts)==4 and parts[1:3]==["monitor","set"] and self.on_control:
+                    self.on_control(parts[0],parts[3],payload)
+                continue
             if event in ("connect", "birth"):
                 self.connected = True
                 self.error = None
@@ -82,6 +107,8 @@ class Publisher:
                 self.error = "MQTT disconnected" if event == "disconnect" else "MQTT authentication/connection rejected"
                 self.inflight.clear()
                 self.dirty.update(self.journal["topics"])
+        if time.monotonic()-self.last_flush >= 15:
+            self.flush()
         for topic, (info, sent) in list(self.inflight.items()):
             if info.is_published():
                 del self.inflight[topic]
@@ -123,8 +150,10 @@ class Publisher:
                 "json_attributes_template": "{{ {'source': value_json.source, 'last_read': value_json.last_read, 'simulation': value_json.simulation, 'details': value_json.details | default(none)} | tojson }}",
                 "availability": [{"topic": self.online_topic}, {"topic": root + "/availability"}],
                 "availability_mode": "all",
-                "expire_after": max(15, machine["interval"] * 3),
+                "expire_after": signal.get("expire_after",max(15, machine["interval"] * 3)),
             }
+            if signal.get("group") == "utilization":
+                component["availability"] = [{"topic":self.online_topic}]
             if component["platform"] == "binary_sensor":
                 component.update(payload_on="ON", payload_off="OFF")
             if signal.get("unit"):
@@ -134,6 +163,26 @@ class Publisher:
             if name.startswith("raw_") or name in ("collector_error", "collector_mode"):
                 component["entity_category"] = "diagnostic"
             components[slug] = component
+        components[key("machine_connected")] = {
+            "platform":"binary_sensor", "unique_id":identity+"_"+key("machine_connected"),
+            "name":"Machine connected", "device_class":"connectivity",
+            "state_topic":root+"/availability", "payload_on":"online", "payload_off":"offline",
+            "availability":[{"topic":self.online_topic}], "entity_category":"diagnostic"}
+        # These controls change only the add-on's read scheduler. They never
+        # reach the native worker as function names, writes or CNC commands.
+        settings = {"boost":("switch",None,None,None), "boost_minutes":("number",1,60,"min"),
+                    "boost_interval":("number",100,1000,"ms")}
+        for setting,(platform,minimum,maximum,unit) in settings.items():
+            component = {"platform":platform,"unique_id":identity+"_monitor_"+setting,
+                         "name":{"boost":"Diagnostic boost","boost_minutes":"Diagnostic boost duration","boost_interval":"Diagnostic fast read interval"}[setting],
+                         "command_topic":root+"/monitor/set/"+setting,
+                         "state_topic":root+"/monitor/state/"+setting,
+                         "entity_category":"config", "availability":[{"topic":self.online_topic}]}
+            if platform == "number":
+                component.update(min=minimum,max=maximum,step=1,mode="box",unit_of_measurement=unit)
+            else:
+                component.update(payload_on="ON",payload_off="OFF")
+            components["monitor_"+setting] = component
         # HA requires a platform-only config to remove a component; omission
         # alone is insufficient. Keep tombstones in retained discovery until
         # the signal is collected again, so HA restart also sees the deletion.
@@ -145,7 +194,7 @@ class Publisher:
         self.put(self.discovery_topic(identity), {
             "device": {"identifiers": [identity], "name": machine["name"],
                        "manufacturer": "FANUC", "model": controller.get("model", "Fanuc CNC")},
-            "origin": {"name": "Fanuc CNC Monitor", "sw_version": "0.1.1-dev"},
+            "origin": {"name": "Fanuc CNC Monitor", "sw_version": "0.2.0"},
             "components": components,
         })
         expected = {root + "/signal/" + key(name) for name in signals}
@@ -185,6 +234,7 @@ class Publisher:
                 self.forget(topic)
         for identity in identities:
             self.availability(identity, False)
+            self.put(self.machine_root(identity)+"/monitor/state/boost","OFF")
             # Avoid restoring stale values before a fresh successful read.
             for topic in list(self.journal["topics"]):
                 if topic.startswith(self.machine_root(identity) + "/signal/"):
@@ -199,5 +249,6 @@ class Publisher:
                     info.wait_for_publish(timeout=2)
                 except RuntimeError:
                     pass  # Journal and LWT cover a connection lost during shutdown.
+        self.flush()
         self.client.disconnect()
         self.client.loop_stop()

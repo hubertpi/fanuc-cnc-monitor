@@ -7,6 +7,9 @@ using l99.driver.fanuc;
 // dedicated to one machine; stdin accepts endpoints, never function names/code.
 internal static class Program
 {
+    static object? cachedController;
+    static int spindleCount;
+    static Dictionary<int, short> diagnosticTypes = new();
     static string Text(char[] value) => new string(value ?? Array.Empty<char>()).Trim('\0', ' ');
     internal static double Scale(int value, short decimals)
     {
@@ -51,6 +54,7 @@ internal static class Program
         {
             if (endpoint is null) return;
             endpoint = null;
+            cachedController = null; spindleCount = 0; diagnosticTypes.Clear();
             release(handle);
         }
     }
@@ -90,14 +94,29 @@ internal static class Program
         ushort handle = session.Ensure(host, port, timeout);
         try
         {
+            var groups = endpoint.TryGetProperty("groups", out var requested)
+                ? requested.EnumerateArray().Select(v => v.GetString()).ToHashSet()
+                : new HashSet<string?> {"fast", "status", "slow"};
+            if (groups.Any(g => g is not ("fast" or "status" or "slow"))) throw new InvalidOperationException("Invalid read group");
             var system = new Focas.ODBSYS();
-            Require(Focas.cnc_sysinfo(handle, system), "cnc_sysinfo");
-            var state = new Focas.ODBST();
-            Require(Focas.cnc_statinfo(handle, state), "cnc_statinfo");
+            // Controller identity is session-scoped, refreshed only with slow reads.
+            if (cachedController is null || groups.Contains("slow"))
+            {
+                Require(Focas.cnc_sysinfo(handle, system), "cnc_sysinfo");
+                string family = Text(system.cnc_type) + (((system.addinfo & 2) != 0) ? "i" : "");
+                cachedController = new {series = family, firmware_series = Text(system.series), version = Text(system.version),
+                    type = Text(system.mt_type), axes = Text(system.axes), model = "Fanuc " + family,
+                    path_scope = "Default FOCAS path"};
+            }
+            string group = "fast";
             var signals = new Dictionary<string, object>();
             var unsupported = new Dictionary<string, object>();
             void Add(string name, object value, string source, string? unit = null, string kind = "sensor") =>
-                signals[name] = new {value, source, unit, kind};
+                signals[name] = new {value, source, unit, kind, group};
+            if (groups.Contains("fast"))
+            {
+            var state = new Focas.ODBST();
+            Require(Focas.cnc_statinfo(handle, state), "cnc_statinfo");
             Add("raw_execution_code", state.run, "cnc_statinfo.run");
             Add("raw_mode_code", state.aut, "cnc_statinfo.aut");
             // Derived labels intentionally describe the raw status, without the
@@ -113,10 +132,24 @@ internal static class Program
                 Add("spindle_rpm", Scale(speed.acts.data, speed.acts.dec), "cnc_rdspeed.acts", SpeedUnit(speed.acts.unit));
                 Add("raw_feed_unit_code", speed.actf.unit, "cnc_rdspeed.actf.unit");
             }
+            // Specified-spindle reads avoid the pinned ABI's four-element array
+            // overflowing on controllers supporting eight spindles.
+            for (short index = 1; index <= spindleCount; index++)
+            {
+                var actual = new Focas.ODBACT2();
+                if (Optional(() => Focas.cnc_acts2(handle, index, actual), "cnc_acts2."+index, unsupported)
+                    && actual.data is {Length: > 0})
+                    Add("spindle_"+index+"_rpm", actual.data[0], "cnc_acts2."+index, "rpm");
+            }
+            }
+            group = "status";
+            if (groups.Contains("status"))
+            {
             var spindle = new Focas.ODBSPLOAD(); short spindles = 4;
             if (Optional(() => Focas.cnc_rdspmeter(handle, 0, ref spindles, spindle), "cnc_rdspmeter", unsupported))
             {
-                for (int index = 1; index <= Math.Clamp(spindles, (short)0, (short)4); index++)
+                spindleCount = Math.Clamp(spindles, (short)0, (short)4);
+                for (int index = 1; index <= spindleCount; index++)
                 {
                     var data = (Focas.ODBSPLOAD_data)typeof(Focas.ODBSPLOAD).GetField("spload" + index)!.GetValue(spindle)!;
                     Add("spindle_" + index + "_load", Scale(data.spload.data, data.spload.dec), "cnc_rdspmeter." + index, LoadUnit(data.spload.unit));
@@ -133,6 +166,56 @@ internal static class Program
                     Add("axis_" + index + "_" + name + "_load", Scale(data.data, data.dec), "cnc_rdsvmeter." + index, LoadUnit(data.unit));
                 }
             }
+            var modal = new Focas.ODBMDL_3();
+            if (Optional(() => Focas.cnc_modal(handle, 108, 0, modal), "cnc_modal", unsupported))
+            {
+                Add("raw_modal_tool_code", modal.aux.aux_data, "cnc_modal.108");
+                if (modal.aux.aux_data >= 0) Add("tool_code", modal.aux.aux_data.ToString("D4"), "cnc_modal.108");
+            }
+            var panel = new Focas.IODBSGNL();
+            if (Optional(() => Focas.cnc_rdopnlsgnl(handle, 32, panel), "cnc_rdopnlsgnl", unsupported))
+            {
+                if ((panel.type & 32) != 0 && panel.feed_ovrd is >= 0 and <= 20)
+                {
+                    Add("raw_feed_override_code", panel.feed_ovrd, "cnc_rdopnlsgnl.feed_ovrd");
+                    Add("feed_override", panel.feed_ovrd * 10, "cnc_rdopnlsgnl.feed_ovrd", "%");
+                }
+                else unsupported["cnc_rdopnlsgnl"] = new {error="Invalid feed override code"};
+            }
+            var alarms = new Focas.ODBALMMSG2(); short alarmCount = 10;
+            if (Optional(() => Focas.cnc_rdalmmsg2(handle, -1, ref alarmCount, alarms), "cnc_rdalmmsg2", unsupported))
+            {
+                var alarmList = new List<object>();
+                for (int index = 1; index <= Math.Clamp(alarmCount, (short)0, (short)10); index++)
+                {
+                    var alarm = (Focas.ODBALMMSG2_data)typeof(Focas.ODBALMMSG2).GetField("msg" + index)!.GetValue(alarms)!;
+                    alarmList.Add(new {code = alarm.alm_no, type = alarm.type, axis = alarm.axis, message = alarm.alm_msg[..Math.Min(Math.Clamp(alarm.msg_len,(short)0,(short)64),alarm.alm_msg.Length)].Trim('\0', ' ')});
+                }
+                Add("alarms", alarmList, "cnc_rdalmmsg2");
+                for (short axis = 1; axis <= 8; axis++)
+                {
+                    bool overtravel = Enumerable.Range(1, Math.Clamp(alarmCount,(short)0,(short)10))
+                        .Select(i => (Focas.ODBALMMSG2_data)typeof(Focas.ODBALMMSG2).GetField("msg"+i)!.GetValue(alarms)!)
+                        .Any(a => a.type == 4 && a.axis == axis);
+                    // Publish axis conditions only for axes actually reported by the load read.
+                    if (signals.Keys.Any(k => k.StartsWith("axis_"+axis+"_")))
+                        Add("axis_"+axis+"_overtravel", overtravel, "cnc_rdalmmsg2.OT", kind:"binary_sensor");
+                }
+                Add("raw_alarm_buffer_full", alarmCount == 10, "cnc_rdalmmsg2.count", kind: "binary_sensor");
+            }
+            var messages = new Focas.OPMSG();
+            if (Optional(() => Focas.cnc_rdopmsg(handle, 0, 262, messages), "cnc_rdopmsg", unsupported))
+            {
+                var msg = messages.msg1;
+                if (msg.datano == -1) Add("machine_message", "", "cnc_rdopmsg.msg1");
+                else if (msg.type == 0 && msg.char_num is > 0 and <= 256)
+                    Add("machine_message", msg.data[..Math.Min(msg.char_num,msg.data.Length)].Trim('\0',' '), "cnc_rdopmsg.msg1");
+                else unsupported["cnc_rdopmsg"] = new {error="Invalid operator message metadata"};
+            }
+            }
+            group = "slow";
+            if (groups.Contains("slow"))
+            {
             var program = new Focas.ODBPRO();
             if (Optional(() => Focas.cnc_rdprgnum(handle, program), "cnc_rdprgnum", unsupported))
             {
@@ -142,31 +225,47 @@ internal static class Program
                 if (Optional(() => Focas.cnc_rdprogdir3(handle, 2, ref number, ref count, directory), "cnc_rdprogdir3", unsupported) && count > 0 && directory.dir1.number == program.data)
                     Add("program_comment", directory.dir1.comment.Trim('\0', ' '), "cnc_rdprogdir3.comment");
             }
-            var modal = new Focas.ODBMDL_3();
-            if (Optional(() => Focas.cnc_modal(handle, 108, 0, modal), "cnc_modal", unsupported))
-                Add("raw_modal_tool_code", modal.aux.aux_data, "cnc_modal.108");
-            var panel = new Focas.IODBSGNL();
-            if (Optional(() => Focas.cnc_rdopnlsgnl(handle, 0, panel), "cnc_rdopnlsgnl", unsupported))
-                Add("raw_feed_override_code", panel.feed_ovrd, "cnc_rdopnlsgnl.feed_ovrd");
-            var alarms = new Focas.ODBALMMSG2(); short alarmCount = 10;
-            if (Optional(() => Focas.cnc_rdalmmsg2(handle, -1, ref alarmCount, alarms), "cnc_rdalmmsg2", unsupported))
-            {
-                var alarmList = new List<object>();
-                for (int index = 1; index <= Math.Clamp(alarmCount, (short)0, (short)10); index++)
+
+                // Fixed maintenance mappings only. Verify existence and layout with
+                // the controller before reading; do not manufacture empty entities.
+                bool modern = JsonSerializer.Serialize(cachedController).Contains("\"series\":\"0i\"")
+                    || JsonSerializer.Serialize(cachedController).Contains("\"series\":\"30i\"");
+                if (modern)
                 {
-                    var alarm = (Focas.ODBALMMSG2_data)typeof(Focas.ODBALMMSG2).GetField("msg" + index)!.GetValue(alarms)!;
-                    alarmList.Add(new {code = alarm.alm_no, type = alarm.type, axis = alarm.axis, message = alarm.alm_msg.Trim('\0', ' ')});
+                    void Diagnostic(short number, short axis, string name, int expectedType, string unit, int minimum, int maximum)
+                    {
+                        string source = "cnc_diagnoss."+number+"."+axis;
+                        if (!diagnosticTypes.TryGetValue(number, out short attribute))
+                        {
+                            var info = new Focas.ODBDIAGIF();
+                            if (!Optional(() => Focas.cnc_rddiaginfo(handle, number, 1, info), "cnc_rddiaginfo."+number, unsupported)) return;
+                            if (info.info_no != 1 || info.info.info1.diag_no != number) { unsupported[source] = new {error="Diagnostic is not present"}; return; }
+                            attribute = info.info.info1.diag_type; diagnosticTypes[number] = attribute;
+                        }
+                        if ((attribute & 3) != expectedType || (attribute & (8|4096)) != 0)
+                        { unsupported[source] = new {error="Diagnostic type does not match maintenance mapping"}; return; }
+                        var data = new Focas.ODBDGN_1();
+                        short length = (short)(4 + (expectedType == 1 ? 1 : expectedType == 2 ? 2 : 4));
+                        if (!Optional(() => Focas.cnc_diagnoss(handle, number, axis, length, data), source, unsupported)) return;
+                        int value = expectedType == 1 ? data.cdata : expectedType == 2 ? data.idata : data.ldata;
+                        if (value < minimum || value > maximum) { unsupported[source] = new {error="Diagnostic value outside validated range"}; return; }
+                        Add(name, value, source, unit);
+                    }
+                    int count = int.TryParse(Text(system.axes), out int n) ? Math.Clamp(n,0,8) : 0;
+                    for (short axis=1; axis<=count; axis++)
+                    {
+                        Diagnostic(308,axis,"axis_"+axis+"_motor_temperature",1,"°C",0,255);
+                        Diagnostic(309,axis,"axis_"+axis+"_encoder_temperature",1,"°C",0,255);
+                        Diagnostic(4901,axis,"axis_"+axis+"_power",3,"W",-99999999,99999999);
+                    }
+                    for (short spindle=1; spindle<=spindleCount; spindle++)
+                    {
+                        Diagnostic(403,spindle,"spindle_"+spindle+"_motor_temperature",1,"°C",0,255);
+                        Diagnostic(4902,spindle,"spindle_"+spindle+"_power",3,"W",-99999999,99999999);
+                    }
                 }
-                Add("alarms", alarmList, "cnc_rdalmmsg2");
-                Add("raw_alarm_buffer_full", alarmCount == 10, "cnc_rdalmmsg2.count", kind: "binary_sensor");
             }
-            var messages = new Focas.OPMSG();
-            if (Optional(() => Focas.cnc_rdopmsg(handle, 0, 262, messages), "cnc_rdopmsg", unsupported))
-                Add("machine_message", messages.msg1.data.Trim('\0', ' '), "cnc_rdopmsg.msg1");
-            string family = Text(system.cnc_type) + (((system.addinfo & 2) != 0) ? "i" : "");
-            return new {controller = new {series = family, firmware_series = Text(system.series), version = Text(system.version),
-                type = Text(system.mt_type), axes = Text(system.axes), model = "Fanuc " + family,
-                path_scope = "Default FOCAS path only; multi-path qualification pending"}, signals, unsupported, simulation = false};
+            return new {controller = cachedController, signals, unsupported, simulation = false};
         }
         catch { session.Dispose(); throw; }
     }

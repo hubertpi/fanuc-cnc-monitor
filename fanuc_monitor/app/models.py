@@ -31,6 +31,10 @@ class MachineInput(Endpoint):
     interval: int = Field(default=1, ge=1, le=60)
     enabled: bool = True
     revision: int | None = Field(default=None, ge=1)
+    fast_interval: float = Field(default=0.25, ge=0.1, le=60)
+    diagnostic_interval: int = Field(default=60, ge=5, le=600)
+    boost_interval: float = Field(default=0.1, ge=0.1, le=1)
+    boost_minutes: int = Field(default=10, ge=1, le=60)
 
     @field_validator("name")
     @classmethod
@@ -39,3 +43,29 @@ class MachineInput(Endpoint):
         if not value or any(ord(ch) < 32 for ch in value):
             raise ValueError("Enter a printable machine name")
         return value
+
+
+class ScanInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    network: str
+    port: int = Field(default=8193, ge=1, le=65535)
+
+    @field_validator("network")
+    @classmethod
+    def valid_network(cls, value):
+        try:
+            network = ipaddress.ip_network(value, strict=False)
+        except ValueError:
+            raise ValueError("Enter an IPv4 subnet such as 192.168.10.0/24")
+        if network.version != 4 or network.prefixlen < 22 or network.is_multicast or network.is_unspecified:
+            raise ValueError("Use a specific IPv4 subnet of /22 or smaller (up to 1,024 addresses)")
+        if any(a.is_multicast or a.is_unspecified for a in (network.network_address, network.broadcast_address)):
+            raise ValueError("Invalid discovery subnet")
+        return str(network)
+
+
+class BoostInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    enabled: bool
+    minutes: int | None = Field(default=None, ge=1, le=60)
+    interval: float | None = Field(default=None, ge=0.1, le=1)

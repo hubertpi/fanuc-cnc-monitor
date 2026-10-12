@@ -36,9 +36,17 @@ class TestBroker:
         if self.loop.is_closed():
             return
         async def shutdown():
+            # Model a broker outage by closing listeners and accepted transports.
+            # This also avoids Python 3.12 Server.wait_closed waiting on clients.
+            for server in self.broker._servers.values():
+                if server.instance: server.instance.close()
+            for session,handler in list(self.broker._sessions.values()):
+                if handler.writer:
+                    handler.writer._writer.transport.abort()
+            await asyncio.sleep(0)
             try:
-                await self.broker.shutdown()
-            except asyncio.CancelledError:
+                await asyncio.wait_for(self.broker.shutdown(),3)
+            except (asyncio.CancelledError,asyncio.TimeoutError):
                 pass
             remaining = [task for task in asyncio.all_tasks() if task is not asyncio.current_task()]
             for task in remaining:

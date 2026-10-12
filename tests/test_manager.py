@@ -69,3 +69,85 @@ def test_structured_alarm_and_long_text_attributes(tmp_path):
     pub.state("machine", "alarms", {"value": [], "source": "cnc_rdalmmsg2"}, "later", False)
     payload = json.loads(pub.journal["topics"][pub.machine_root("machine") + "/signal/" + key("alarms")])
     assert payload["value"] == 0 and payload["details"] == []
+
+
+def test_poll_groups_partial_values_boost_expiry_and_local_only_controls(tmp_path,monkeypatch):
+    import app.manager as module
+    class Clock:
+        value=0
+        def now(self): return self.value
+    clock=Clock()
+    class Collector:
+        mode='simulation'
+        busy=False
+        calls=[]
+        async def read(self,record):
+            assert not self.busy
+            self.busy=True
+            self.calls.append((clock.value,record['groups']))
+            clock.value+=.05
+            await asyncio.sleep(0)
+            self.busy=False
+            signals={}
+            if 'fast' in record['groups']:
+                signals={name:{'value':value,'source':'test','group':'fast'} for name,value in [('mode','AUTOMATIC'),('execution','ACTIVE'),('feed_rate',4)]}
+            if 'slow' in record['groups']:
+                signals['program_number']={'value':53,'source':'test','group':'slow'}
+            return {'controller':{},'signals':signals,'unsupported':{'cnc_diagnoss.309':{'code':3}} if 'slow' in record['groups'] else {}}
+        async def close(self): pass
+    async def run():
+        pub=Publisher(tmp_path)
+        manager=Manager(Store(tmp_path/'machines.json'),pub,Collector)
+        record=await manager.save(MachineInput(host='192.0.2.1',name='Test'))
+        identity=record['id']
+        # Replace scheduler waits with virtual time; no wall-clock soak needed.
+        monkeypatch.setattr(module.time,'monotonic',clock.now)
+        async def virtual_wait(identity,delay):
+            clock.value+=delay
+            await asyncio.sleep(0)
+        manager.wait=virtual_wait
+        for _ in range(15): await asyncio.sleep(0)
+        assert manager.status[identity]['signals']['program_number']['value']==53
+        assert 'cnc_diagnoss.309' in manager.status[identity]['unsupported']
+        collector_calls=Collector.calls
+        assert any(groups==['fast'] for _,groups in collector_calls)
+        manager.control(identity,'boost_minutes',b'2.0')
+        for _ in range(5):await asyncio.sleep(0)
+        assert manager.records[identity]['boost_minutes']==2
+        manager.control(identity,'boost',b'ON')
+        assert identity in manager.boosts
+        clock.value=manager.boosts[identity][0]+1
+        for _ in range(10):await asyncio.sleep(0)
+        assert identity not in manager.boosts
+        revision=manager.records[identity]['revision']
+        for setting,payload in [('boost_minutes',b'999'),('boost_interval',b'inf'),('boost_minutes',b'nan'),('boost_interval',b'0'),('cnc_reset',b'ON'),('boost',b'cnc_start')]:
+            manager.control(identity,setting,payload)
+        assert manager.records[identity]['revision']==revision
+        await manager.close()
+    asyncio.run(run())
+
+
+def test_retained_local_commands_are_not_replayed(tmp_path):
+    from types import SimpleNamespace
+    pub=Publisher(tmp_path)
+    received=[]
+    pub.on_control=lambda *args:received.append(args)
+    topic=pub.machine_root('machine')+'/monitor/set/boost'
+    pub._message(None,None,SimpleNamespace(topic=topic,payload=b'ON',retain=True))
+    pub.pump()
+    assert received==[]
+    pub._message(None,None,SimpleNamespace(topic=topic,payload=b'ON',retain=False))
+    pub.pump()
+    assert received==[('machine','boost',b'ON')]
+
+
+def test_utilization_availability_survives_cnc_outage(tmp_path):
+    pub=Publisher(tmp_path)
+    machine={'id':'test','name':'Lathe','interval':1}
+    signals={'production_month_utilization':{'value':20,'source':'monitor.confirmed_feed_utilization','group':'utilization','expire_after':30},
+             'rpm':{'value':100,'source':'cnc_acts2'}}
+    pub.discovery(machine,signals,{})
+    from app.mqtt import key
+    config=json.loads(pub.journal['topics'][pub.discovery_topic('test')])
+    assert config['components'][key('production_month_utilization')]['availability']==[{'topic':pub.online_topic}]
+    assert len(config['components'][key('rpm')]['availability'])==2

@@ -11,7 +11,8 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
 from .collector import CollectionError, factory
 from .manager import Manager
-from .models import Endpoint, MachineInput
+from .models import Endpoint, MachineInput, ScanInput, BoostInput
+from .discovery import Discovery
 from .mqtt import Publisher
 from .store import Store
 
@@ -47,7 +48,7 @@ def create_app(directory=None, options=None, collector_factory=None, publisher=N
 
     @asynccontextmanager
     async def lifespan(app):
-        pub = publisher or Publisher(directory, await supervisor_mqtt(options))
+        pub = publisher or Publisher(directory, await supervisor_mqtt(options), deferred=True)
         startup_error = None
         try:
             make_collector = collector_factory or factory(options)
@@ -57,6 +58,7 @@ def create_app(directory=None, options=None, collector_factory=None, publisher=N
                 raise CollectionError(startup_error)
         manager = Manager(Store(directory / "machines.json"), pub, make_collector)
         app.state.manager, app.state.publisher, app.state.error = manager, pub, startup_error
+        app.state.discovery = Discovery(simulation=options.get("mode","simulation")=="simulation")
         pub.start()
         if not startup_error:
             await manager.start()
@@ -66,6 +68,7 @@ def create_app(directory=None, options=None, collector_factory=None, publisher=N
                 manager.status[identity] = {**manager.empty_status(), "error": startup_error}
         async def pump():
             service_retry = time.monotonic() + 30
+            stats_due = 0
             while True:
                 if not pub.broker.get("host") and time.monotonic() >= service_retry:
                     broker = await supervisor_mqtt(options)
@@ -77,15 +80,33 @@ def create_app(directory=None, options=None, collector_factory=None, publisher=N
                 for identity, health in manager.status.items():
                     if health["online"] and health["last_success"]:
                         age = (datetime.now(timezone.utc) - datetime.fromisoformat(health["last_success"])).total_seconds()
-                        if age > max(15, manager.records[identity]["interval"] * 3):
+                        if age > max(15, min(manager.records[identity]["interval"],manager.records[identity]["fast_interval"]) * 3):
                             health.update(online=False, error="Data read is stale; awaiting collector recovery")
                             pub.availability(identity, False)
+                if time.monotonic()>=stats_due:
+                    from .manager import utc
+                    for identity,health in manager.status.items():
+                        if not health["online"]:
+                            now = utc()
+                            values = manager.utilization.signals(identity)
+                            for name,signal in values.items():
+                                signal.update(last_read=now,expire_after=30)
+                                health["signals"][name] = signal
+                                pub.state(identity,name,signal,now,options.get("mode","simulation")=="simulation")
+                            pub.discovery(manager.records[identity],health["signals"],health["controller"])
+                    stats_due = time.monotonic()+5
+                for identity,(deadline,interval) in list(manager.boosts.items()):
+                    if deadline<=time.monotonic():
+                        manager.boost(identity,False)
+                        pub.put(pub.machine_root(identity)+"/monitor/state/boost","OFF")
+                manager.utilization.maintain(time.time())
                 pub.pump()
                 await asyncio.sleep(0.2)
         task = asyncio.create_task(pump())
         try:
             yield
         finally:
+            await app.state.discovery.close()
             await manager.close()
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -129,7 +150,31 @@ def create_app(directory=None, options=None, collector_factory=None, publisher=N
         return {"csrf": csrf, "mode": options.get("mode", "simulation"),
                 "hardware_testing_enabled": options.get("hardware_testing_enabled", False),
                 "mqtt_connected": pub.connected, "mqtt_error": pub.error,
-                "startup_error": app.state.error, "machines": manager.list()}
+                "startup_error": app.state.error, "machines": manager.list(), "discovery": app.state.discovery.state}
+
+    @app.post("/api/discovery")
+    async def scan(value: ScanInput):
+        if app.state.error: raise HTTPException(409,app.state.error)
+        try:
+            app.state.discovery.start(value.network,value.port)
+        except ValueError as error:
+            raise HTTPException(409,str(error)) from error
+        return app.state.discovery.state
+
+    @app.delete("/api/discovery")
+    async def cancel_scan():
+        await app.state.discovery.close()
+        return app.state.discovery.state
+
+    @app.post("/api/machines/{identity}/boost")
+    async def boost(identity: uuid.UUID, value: BoostInput):
+        try:
+            app.state.manager.boost(str(identity),value.enabled,value.minutes,value.interval)
+        except KeyError:
+            raise HTTPException(404,"Machine no longer exists")
+        except ValueError as error:
+            raise HTTPException(409,str(error)) from error
+        return {"ok":True}
 
     @app.post("/api/test")
     async def test(endpoint: Endpoint):

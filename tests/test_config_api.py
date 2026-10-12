@@ -46,18 +46,18 @@ def test_api_onboarding_identity_and_restart(tmp_path):
         time.sleep(.1)
         item = client.get("/api/status").json()["machines"][0]
         assert item["online"] and item["last_success"] and len(item["signals"]) >= 15
-        journal = json.loads((tmp_path / "mqtt-journal.json").read_text())
+        journal = app.state.publisher.journal
         config_topic = next(t for t in journal["topics"] if t.startswith("homeassistant/"))
         config = json.loads(journal["topics"][config_topic])
         uniques = {c["unique_id"] for c in config["components"].values()}
         assert config["device"]["identifiers"] == [identity]
-        assert {c["platform"] for c in config["components"].values()} == {"sensor", "binary_sensor"}
-        assert "command_topic" not in json.dumps(config)
+        assert {c["platform"] for c in config["components"].values()} == {"sensor", "binary_sensor", "number", "switch"}
+        assert all("/monitor/set/" in c["command_topic"] for c in config["components"].values() if "command_topic" in c)
         rename = {**value, "name": "Renamed lathe", "revision": 1}
         assert client.put("/api/machines/" + identity, json=rename, headers=headers).status_code == 200
         assert client.put("/api/machines/" + identity, json=rename, headers=headers).status_code == 409
         time.sleep(.1)
-        new_config = json.loads(json.loads((tmp_path / "mqtt-journal.json").read_text())["topics"][config_topic])
+        new_config = json.loads(app.state.publisher.journal["topics"][config_topic])
         assert uniques == {c["unique_id"] for c in new_config["components"].values()}
         assert new_config["device"]["name"] == "Renamed lathe"
     with TestClient(create_app(tmp_path, {"mode": "simulation"}, development=True)) as client:
@@ -95,7 +95,7 @@ def test_stale_data_marks_machine_offline_independently(tmp_path):
         headers = {"x-monitor-csrf": client.get("/api/status").json()["csrf"]}
         endpoint = {"host": "192.0.2.30", "port": 8193, "timeout": 3}
         headers["x-connection-test"] = client.post("/api/test", json=endpoint, headers=headers).json()["test_token"]
-        identity = client.post("/api/machines", json={**endpoint, "name": "Stale test", "interval": 60}, headers=headers).json()["id"]
+        identity = client.post("/api/machines", json={**endpoint, "name": "Stale test", "interval": 60, "fast_interval": 60.0}, headers=headers).json()["id"]
         deadline = time.monotonic() + 2
         while not app.state.manager.status[identity]["online"] and time.monotonic() < deadline:
             time.sleep(.02)

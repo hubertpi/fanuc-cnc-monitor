@@ -1,41 +1,34 @@
-# Architecture and boundaries
+# Architecture and read-only boundary
 
-FastAPI owns versioned configuration, Ingress routes and endpoint-test tokens.
-The UI uses relative URLs under a validated Ingress base path. Production allows
-only the Supervisor Ingress socket peer; forwarded headers cannot grant access.
-Mutations require CSRF tokens. The development server binds loopback separately.
+Each machine has an independent Python collector task and .NET worker process.
+The worker owns one persistent FOCAS handle on one OS thread. Requests contain only
+endpoint fields and fixed read-group names. Native calls run sequentially; errors
+invalidate the session, and that machine reconnects with bounded backoff. EOF closes
+its handle; hung workers are terminated after a two-second shutdown grace period.
 
-Store writes atomic JSON under `/data`. Stable machine UUIDs and optimistic
-revisions survive rename, readdress and restart. Tests expire after five minutes
-and are scoped to host, port and timeout; a new/changed endpoint cannot save
-without its successful test token. There is no subnet scan.
+The generated binding retains only the exact functions in
+`fanuc_monitor/worker/allowlist.json`: four session/process functions and fourteen
+reads. Source preparation verifies the immutable upstream SHA-256, resolves the
+Linux ABI and rejects unrecognized imports or altered entry points. Tests require
+worker calls and generated imports to match the allowlist exactly.
 
-Manager runs one collector task per enabled machine. Edit/disable/remove cancels
-only that task. Each live collector owns a bounded worker process. Synchronous
-FOCAS calls stay on its single main thread; one session handle is reused across
-successful sweeps. Endpoint changes or failed reads release the handle; transport
-failures close that worker and back off independently. Shutdown sends stdin EOF
-to release the handle before native process cleanup, with a two-second forced
-termination fallback for hung calls. Overall
-freshness is separate from broker connectivity.
+No CNC start/stop/reset/jog, spindle/feed commands, program transfer, parameter
+writes or PMC writes are available through the binding. The underlying third-party
+library contains other functions, but this application cannot import or dispatch
+them. MQTT commands are restricted to the add-on's diagnostic boost, its duration,
+and its fast read interval. Retained commands are ignored. There is no arbitrary
+FOCAS function selector, code evaluation, or raw CNC command endpoint.
 
-The generated native binding contains only worker/allowlist.json imports.
-Tests compare generated imports, call sites and allowlist, including EntryPoint
-remapping rejection. Optional read failures remain group diagnostics; required
-controller/state and transport failures mark offline. Decimal scale and units
-come from supported FOCAS metadata, never a blanket MTConnect division.
+The Web UI uses Supervisor Ingress and CSRF protection; no host port is published.
+Discovery is a bounded, user-started TCP scan. Saving a new endpoint requires a
+successful FOCAS identity/read test, not merely an open port.
 
-Publisher stores a durable retained-topic journal with QoS 1 acknowledgements,
-LWT, machine availability and HA birth/reconnect republication. Device IDs use
-persistent machine UUIDs and stable signal identities. Changed values publish;
-unchanged values refresh before expiry. Durable tombstones clear removals and
-schema changes. The only MQTT subscription is HA birth; no controls are exposed.
+SQLite accumulates confirmed scheduled production/observed durations in minute
+rows, with seven-day retention and current period counters. HA/MQTT availability
+has no role in production classification. MQTT maintains latest retained states,
+QoS 1 acknowledgement, HA birth/reconnect replay and durable deletion tombstones.
+Both stores checkpoint periodically, with normal shutdown flushes.
 
-Structured alarms publish count as state and full code/type/axis/text in
-attributes. Oversized text retains full details. Diagnostics exclude broker
-passwords and Supervisor tokens, but contain addresses and operator messages.
-
-Native limits: default CNC path, eight axes, four spindles, ten alarm records,
-and first operator message. Generalized selected-tool and percent feed-override
-mappings remain unverified: raw modal/panel codes are diagnostic values without
-invented units. Simulator values are not evidence of native metric support.
+Controller response latency can extend polling intervals. Network payload volume
+and maximum client counts do not measure CNC CPU headroom. Faster reads and new
+maintenance mappings require controller-specific comparison.

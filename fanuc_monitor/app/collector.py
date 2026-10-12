@@ -23,7 +23,7 @@ class Simulator:
         tick = int(time.monotonic())
         def signal(value, source, kind="sensor", unit=None):
             return {"value": value, "source": source, "kind": kind, "unit": unit}
-        return {"controller": {"series": "0i", "version": "SIM", "type": "T", "axes": 2,
+        result = {"controller": {"series": "0i", "version": "SIM", "type": "T", "axes": 2,
                                "model": "Simulated Fanuc 0i-T", "simulation": True},
                 "signals": {
                     "execution": signal("ACTIVE" if tick % 20 < 15 else "READY", "cnc_statinfo.run"),
@@ -42,6 +42,12 @@ class Simulator:
                     "alarms": signal([], "cnc_rdalmmsg2"),
                     "machine_message": signal("Simulation; no CNC connected", "cnc_rdopmsg")},
                 "unsupported": {}, "simulation": True}
+        slow = {"program_number", "program_comment"}
+        fast = {"execution", "mode", "spindle_rpm", "feed_rate", "emergency_stop", "alarm_active"}
+        for name,signal in result["signals"].items():
+            signal["group"] = "slow" if name in slow else "fast" if name in fast else "status"
+        result["signals"] = {n:s for n,s in result["signals"].items() if s["group"] in endpoint.get("groups",("fast","status","slow"))}
+        return result
 
     async def close(self):
         pass
@@ -69,6 +75,8 @@ class NativeCollector:
             raise CollectionError("Machine DNS/IPv4 address cannot be resolved") from error
         request = {k: endpoint[k] for k in ("host", "port", "timeout")}
         request["host"] = addresses[0][4][0]
+        if "groups" in endpoint:
+            request["groups"] = endpoint["groups"]
         self.process.stdin.write((json.dumps(request) + "\n").encode())
         await self.process.stdin.drain()
         try:
