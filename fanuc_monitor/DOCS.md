@@ -19,7 +19,9 @@ Simulation still publishes to MQTT; use a separate test broker when experimentin
 ## Machines and discovery
 
 The scanner checks a user-selected IPv4 subnet, at most /22 (1,024 addresses), with
-16 concurrent TCP probes and a 500 ms timeout. It runs only when requested. An open
+16 concurrent TCP probes and a 500 ms timeout. It runs only when requested. Already configured IP/port pairs are skipped,
+including disabled machines; a different port on the same IP remains a candidate.
+Results also hide machines added while a scan is running. An open
 port is a candidate, not proof of a FANUC controller. A successful FOCAS test of the
 exact IP/port/timeout is required before adding or readdressing a machine; the test
 expires after five minutes. IPv4 DNS names and manual/custom-port entry are supported.
@@ -35,6 +37,23 @@ selected machine's collector and cancel its boost.
 The Details view and diagnostic export include sources, last-read times, units,
 unsupported reads, read duration, errors, reconnect attempts and MQTT acknowledgements.
 MQTT acknowledgement means broker receipt, not proof HA created an entity.
+
+## Shared shift schedule
+
+Open **Shift schedule** in the Web UI. Configure 1–8 named shifts, start/end times,
+working days (shift start days), timezone and up to 12 breaks per shift. Breaks use
+start time and duration in minutes. An end earlier than its start means next day.
+Shifts and breaks cannot overlap; breaks must fit inside their shift. Sunday-to-Monday
+and daylight-saving boundaries are handled in the configured timezone.
+
+Settings are shared by all machines and stored in `/data/schedule.json`. Upgrades
+from 0.2.0 keep the existing two-shift Chicago schedule without resetting machine
+IDs or counters. Edits take effect when saved, not retroactively. A bounded set of
+configuration revisions preserves the historical planned-time denominator for the
+current calendar month/week and rolling day. This is configuration metadata, not
+additional machine history. Timezone changes adjust the calendar boundaries of
+future periods. Existing shift sensor identities follow their numbered slots;
+removed shift entities are removed from MQTT discovery.
 
 ## Reading interpretation
 
@@ -55,6 +74,7 @@ MQTT acknowledgement means broker receipt, not proof HA created an entity.
 
 Back up the add-on's `/data` directory as a unit:
 
+- `schedule.json`: shared schedule, edit revision and effective setting revisions.
 - `machines.json`: stable UUIDs, revisions and polling settings.
 - `mqtt-journal.json`: installation identity, latest retained states and cleanup.
 - `utilization.sqlite`, with its SQLite sidecars: minute totals and period counters.

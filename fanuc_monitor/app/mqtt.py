@@ -143,7 +143,7 @@ class Publisher:
             component = {
                 "platform": signal.get("kind", "sensor"),
                 "unique_id": identity + "_" + slug,
-                "name": name.replace("_", " ").title(),
+                "name": signal.get("label",name.replace("_", " ").title()),
                 "state_topic": root + "/signal/" + slug,
                 "value_template": "{{ value_json.value }}",
                 "json_attributes_topic": root + "/signal/" + slug,
@@ -194,7 +194,7 @@ class Publisher:
         self.put(self.discovery_topic(identity), {
             "device": {"identifiers": [identity], "name": machine["name"],
                        "manufacturer": "FANUC", "model": controller.get("model", "Fanuc CNC")},
-            "origin": {"name": "Fanuc CNC Monitor", "sw_version": "0.2.0"},
+            "origin": {"name": "Fanuc CNC Monitor", "sw_version": "0.3.0"},
             "components": components,
         })
         expected = {root + "/signal/" + key(name) for name in signals}

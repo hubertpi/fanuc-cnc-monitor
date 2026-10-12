@@ -1,5 +1,6 @@
 "use strict";
 const $ = id => document.getElementById(id);
+let scheduleDraft = null;
 let status = null, editing = null, removing = null, detailId = null, testToken = "", originalEndpoint = "";
 const endpoint = () => ({host: $("host").value.trim(), port: Number($("port").value), timeout: Number($("timeout").value)});
 const endpointKey = value => JSON.stringify([value.host, value.port, value.timeout]);
@@ -77,7 +78,7 @@ function render() {
     title.append(text("h3", machine.name), text("span", machine.controller.model || "Controller identification pending", "model"));
     top.append(title, text("span", machine.online ? "● ONLINE" : machine.enabled ? "● OFFLINE" : "● DISABLED", "badge" + (machine.online ? "" : " off"))); card.append(top);
     const data = document.createElement("dl");
-    for (const [label,value] of [["FOCAS ENDPOINT",`${machine.host}:${machine.port}`],["READ INTERVALS",`${machine.fast_interval}s fast / ${machine.interval}s status / ${machine.diagnostic_interval}s diagnostics`],["LAST SUCCESSFUL READ",when(machine.last_success)],["COLLECTED VALUES",Object.keys(machine.signals).length],["SHIFT UTILIZATION",`${machine.signals.production_shift_1_utilization?.value ?? "—"}% first / ${machine.signals.production_shift_2_utilization?.value ?? "—"}% second`],["READ DURATION",`${machine.read_duration_ms ?? 0} ms`]]) {const item = document.createElement("div"); item.append(text("dt",label), text("dd",value)); data.append(item);} card.append(data);
+    for (const [label,value] of [["FOCAS ENDPOINT",`${machine.host}:${machine.port}`],["READ INTERVALS",`${machine.fast_interval}s fast / ${machine.interval}s status / ${machine.diagnostic_interval}s diagnostics`],["LAST SUCCESSFUL READ",when(machine.last_success)],["COLLECTED VALUES",Object.keys(machine.signals).length],["SHIFT UTILIZATION",status.schedule.shifts.map((shift,index)=>`${shift.name}: ${machine.signals[`production_shift_${index+1}_utilization`]?.value ?? "—"}%`).join(" / ")],["READ DURATION",`${machine.read_duration_ms ?? 0} ms`]]) {const item = document.createElement("div"); item.append(text("dt",label), text("dd",value)); data.append(item);} card.append(data);
     if (machine.error) card.append(text("p", machine.error, "error"));
     const actions = text("div", "", "machine-actions");
     for (const [label,fn,cls] of [[machine.boost_remaining ? `Stop boost (${machine.boost_remaining}s)` : "Diagnostic boost",async()=>{try{await api(`machines/${machine.id}/boost`,"POST",{enabled:!machine.boost_remaining});await refresh();}catch(error){$("notice").hidden=false;$("notice").textContent=error.message;}},""],["Details",()=>showDetails(machine),""],["Edit",()=>openEditor(machine),""],["Remove",()=>{removing=machine; $("remove-name").textContent=machine.name; $("remove-error").textContent=""; $("removal").showModal();},"remove"]]) {const button=text("button",label,cls);button.onclick=fn;actions.append(button);} card.append(actions); $("machines").append(card);
@@ -88,10 +89,12 @@ function render() {
 async function refresh() {try {status=await api("status"); render(); $("refresh-state").textContent="Updated " + new Date().toLocaleTimeString();} catch(error) {$("notice").hidden=false;$("notice").textContent="Cannot reach collector: " + error.message;}}
 function renderScan() {
   const scan = status.discovery || {};
-  $("scan-state").textContent = scan.error || (scan.total ? `${scan.simulation ? "SIMULATION · " : ""}${scan.running ? "Scanning" : scan.cancelled ? "Stopped" : "Finished"}: ${scan.checked}/${scan.total} addresses` : "Choose a subnet to scan.");
+  const configured = new Set(status.machines.map(m=>JSON.stringify([m.host,m.port])));
+  $("scan-state").textContent = scan.error || (scan.total ? `${scan.simulation ? "SIMULATION · " : ""}${scan.running ? "Scanning" : scan.cancelled ? "Stopped" : "Finished"}: ${scan.checked}/${scan.total} addresses · ${scan.already_configured || 0} already configured` : "Choose a subnet to scan.");
   $("scan-start").disabled = !!scan.running; $("scan-cancel").disabled = !scan.running;
   $("scan-results").replaceChildren();
   for (const candidate of scan.candidates || []) {
+    if (configured.has(JSON.stringify([candidate.host,candidate.port]))) continue;
     const button = text("button",`${candidate.host}:${candidate.port}`,"secondary"); button.type="button";
     button.onclick=()=>{ $("host").value=candidate.host;$("port").value=candidate.port;$("host").dispatchEvent(new Event("input"));$("discovery-panel").open=false;};
     $("scan-results").append(button);
@@ -104,4 +107,47 @@ for (const id of ["close-editor","cancel-editor"]) $(id).onclick=()=>$("editor")
 $("close-details").onclick=()=>$("details").close(); $("cancel-remove").onclick=()=>$("removal").close();
 $("confirm-remove").onclick=async()=>{ $("confirm-remove").disabled=true;try{await api(`machines/${removing.id}`,"DELETE");$("removal").close();await refresh();}catch(error){$("remove-error").textContent=error.message;}finally{$("confirm-remove").disabled=false;}};
 $("export").onclick=async()=>{try{const blob=new Blob([JSON.stringify(await api("diagnostics"),null,2)],{type:"application/json"});const url=URL.createObjectURL(blob);const link=document.createElement("a");link.href=url;link.download="fanuc-diagnostics.json";link.click();URL.revokeObjectURL(url);}catch(error){$("notice").hidden=false;$("notice").textContent=error.message;}};
+function scheduleInput(label,value,type,update) {
+  const wrapper=document.createElement("label");wrapper.append(text("span",label));
+  const input=document.createElement("input");input.type=type;input.value=value;input.required=true;
+  input.oninput=()=>update(type==="number"?Number(input.value):input.value);
+  if(type==="number"){input.min="1";input.max="240";input.step="1";}
+  wrapper.append(input);return wrapper;
+}
+function renderSchedule() {
+  $("schedule-days").replaceChildren();
+  ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"].forEach((day,index)=>{
+    const label=text("label",day,"checkbox");const box=document.createElement("input");box.type="checkbox";box.checked=scheduleDraft.weekdays.includes(index);
+    box.onchange=()=>{scheduleDraft.weekdays=scheduleDraft.weekdays.filter(d=>d!==index);if(box.checked)scheduleDraft.weekdays.push(index);};
+    label.prepend(box);$("schedule-days").append(label);
+  });
+  $("schedule-shifts").replaceChildren();
+  scheduleDraft.shifts.forEach((shift,index)=>{
+    const card=text("section","","schedule-shift"),heading=text("div","","dialog-heading");
+    heading.append(text("h3",`Shift ${index+1}`));
+    const remove=text("button","Remove shift","secondary");remove.type="button";remove.disabled=scheduleDraft.shifts.length===1;
+    remove.onclick=()=>{scheduleDraft.shifts.splice(index,1);renderSchedule();};heading.append(remove);card.append(heading);
+    card.append(scheduleInput("Name",shift.name,"text",v=>shift.name=v));
+    const times=text("div","","grid");times.append(scheduleInput("Starts",shift.start,"time",v=>shift.start=v),scheduleInput("Ends",shift.end,"time",v=>shift.end=v));card.append(times);
+    card.append(text("h4","Breaks"));
+    shift.breaks.forEach((item,breakIndex)=>{
+      const row=text("div","","schedule-break");
+      row.append(scheduleInput("Starts",item.start,"time",v=>item.start=v),scheduleInput("Minutes",item.minutes,"number",v=>item.minutes=v));
+      const remove=text("button","Remove","secondary");remove.type="button";remove.onclick=()=>{shift.breaks.splice(breakIndex,1);renderSchedule();};row.append(remove);card.append(row);
+    });
+    const add=text("button","＋ Add break","secondary");add.type="button";add.disabled=shift.breaks.length>=12;
+    add.onclick=()=>{shift.breaks.push({start:shift.start,minutes:10});renderSchedule();};card.append(add);$("schedule-shifts").append(card);
+  });
+  $("schedule-add").disabled=scheduleDraft.shifts.length>=8;
+}
+$("schedule-open").onclick=()=>{if(!status?.schedule)return;scheduleDraft=structuredClone(status.schedule);delete scheduleDraft.effective;$("schedule-timezone").value=scheduleDraft.timezone;$("schedule-error").textContent="";renderSchedule();$("schedule-dialog").showModal();};
+for(const id of ["schedule-close","schedule-cancel"])$(id).onclick=()=>$("schedule-dialog").close();
+$("schedule-add").onclick=()=>{const previous=scheduleDraft.shifts.at(-1);scheduleDraft.shifts.push({name:`Shift ${scheduleDraft.shifts.length+1}`,start:previous?.end || "06:00",end:"06:00",breaks:[]});renderSchedule();};
+$("schedule-form").onsubmit=async event=>{
+  event.preventDefault();$("schedule-save").disabled=true;$("schedule-error").textContent="";
+  scheduleDraft.timezone=$("schedule-timezone").value.trim();
+  try{await api("schedule","PUT",scheduleDraft);$("schedule-dialog").close();await refresh();}
+  catch(error){$("schedule-error").textContent=error.message;}
+  finally{$("schedule-save").disabled=false;}
+};
 refresh(); setInterval(refresh,2000);

@@ -26,3 +26,17 @@ software tests and hardware qualification. Older HA lifecycle helpers remain und
 Pinned upstream binding/runtime provenance and licensing information remain in
 `fanuc_monitor/worker/upstream.lock.json`, `fanuc_monitor/native/provenance.json`
 and `NOTICE.md`. Review any newly allowed native function before adding it.
+
+## Prebuilt image releases
+
+The validation workflow tests every change. Push a prepared release to a
+`release/` branch to build/test/publish its versioned amd64 image to GHCR, without
+exposing that version in the HA store yet. The publish job uses its repository's
+`GITHUB_TOKEN` with package-write permission; no personal token is required.
+
+The first GHCR package defaults to private. Set the package to Public once, then
+run `python tools/check_image.py ghcr.io/hubertpi/fanuc-cnc-monitor:VERSION` to verify
+anonymous download access. Advance `main` to the validated release commit only
+after this check passes. HA uses `config.yaml`'s image/version to download it.
+Existing version tags are immutable: republishing another commit under the same
+version fails, so bump the version for any later change.

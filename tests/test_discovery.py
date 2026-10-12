@@ -29,3 +29,20 @@ def test_scan_bounded_and_sorted_and_cancelled():
 @pytest.mark.parametrize('network',['0.0.0.0/0','172.26.0.0/16','224.0.0.0/24','::1/128','bad'])
 def test_scan_rejects_unbounded_network(network):
     with pytest.raises(ValidationError): ScanInput(network=network)
+
+
+def test_configured_endpoints_are_skipped_and_live_results_filtered():
+    async def run():
+        calls=[]
+        async def probe(host,port):
+            calls.append((host,port));return True
+        scan=Discovery(probe=probe)
+        records=[{'host':'192.0.2.1','port':8193,'enabled':False}]
+        scan.start('192.0.2.0/30',8193,records)
+        await scan.task
+        assert calls==[('192.0.2.2',8193)]
+        assert scan.view(records)['candidates']==[{'host':'192.0.2.2','port':8193}]
+        assert scan.view(records+[{'host':'192.0.2.2','port':8193}])['candidates']==[]
+        scan.start('192.0.2.0/30',8194,records);await scan.task
+        assert len(scan.view(records)['candidates'])==2
+    asyncio.run(run())

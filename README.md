@@ -18,8 +18,8 @@ interface; the default port is **8193**.
    controller identity, choose a name and save. Custom ports remain supported.
 
 Home Assistant creates one MQTT device per machine. Existing machine UUIDs and
-sensor identities survive updates. The image builds locally; installation can
-take several minutes. HA Container without Supervisor and ARM hosts are unsupported.
+sensor identities survive updates. Updates download a prebuilt image from GitHub Container Registry; HA does not
+compile the add-on locally. HA Container without Supervisor and ARM hosts are unsupported.
 
 ## Polling and diagnostic boost
 
@@ -51,14 +51,16 @@ Spindle warmups and MDI do not qualify. This is feed-motion utilization, not the
 full availability × performance × quality OEE formula; air moves may count, while
 stationary cutting, dwell and tool changes do not.
 
-All machines use America/Chicago time, Monday–Friday:
+Open **Shift schedule** in the Web UI to adjust the shared timezone, working days,
+shift count (1–8), names, start/end times and breaks. The initial defaults remain
+America/Chicago, Monday–Friday:
 
 | Shift | Hours | Breaks |
 | --- | --- | --- |
 | First | 06:00–16:00 | 08:30–08:40, 11:00–11:30, 13:30–13:40 |
 | Second | 16:00–02:00 next day | 18:30–18:40, 21:00–21:30, 23:30–23:40 |
 
-Each shift has **550 planned minutes** after breaks. Overnight shifts belong to
+The default shifts each have **550 planned minutes** after breaks. Overnight shifts belong to
 their starting workday, including Friday's shift ending Saturday. In-progress
 percentages use elapsed planned time. Entities cover both shifts, rolling 24 hours,
 week and month, including production time, planned time, unknown time and coverage.
@@ -68,7 +70,9 @@ Collection and local counters continue during HA Core or MQTT outages, provided
 the add-on and CNC remain running. Reconnection publishes current totals; it does
 not backfill every raw observation into HA Recorder. Historical duration detail is
 limited to **seven days**. Small current-period totals survive beyond that to keep
-month calculations intact. Configuration and data live in `/data` and are included
+month calculations intact. Schedule edits take effect when saved; earlier planned time is preserved using
+bounded schedule-setting revisions. Removed shifts have their HA entities cleaned
+up automatically. Configuration and data live in `/data` and are included
 in add-on backups.
 
 ## Support and development

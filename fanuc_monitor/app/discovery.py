@@ -25,13 +25,20 @@ class Discovery:
         self.task = None
         self.state = {"running": False, "checked": 0, "total": 0, "candidates": []}
 
-    def start(self, network, port):
+    def view(self,records=()):
+        configured={(item["host"],item["port"]) for item in records}
+        candidates=[c for c in self.state["candidates"] if (c["host"],c["port"]) not in configured]
+        return {**self.state,"candidates":candidates,"already_configured":self.state.get("already_configured",0)+len(self.state["candidates"])-len(candidates)}
+
+    def start(self, network, port, records=()):
         if self.task and not self.task.done():
             raise ValueError("A discovery scan is already running")
         hosts = list(ipaddress.ip_network(network).hosts())
         self.state = {"running": True, "checked": 0, "total": len(hosts),
                       "network": network, "port": port, "simulation": self.simulation,
                       "candidates": [], "cancelled": False, "error": None}
+        self.excluded={(item["host"],item["port"]) for item in records}
+        self.state["already_configured"]=0
         self.task = asyncio.create_task(self.scan(hosts, port))
 
     async def scan(self, hosts, port):
@@ -41,6 +48,10 @@ class Discovery:
         async def worker():
             while not queue.empty():
                 host = queue.get_nowait()
+                if (host,port) in self.excluded:
+                    self.state["checked"]+=1
+                    self.state["already_configured"]+=1
+                    continue
                 if self.simulation:
                     await asyncio.sleep(0)
                     found = host in {str(h) for h in hosts[:2]}

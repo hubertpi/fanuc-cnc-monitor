@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0
+
+- Add a shared UI editor for 1–8 shifts, names, start/end times, breaks, working days and timezone.
+- Apply schedule edits prospectively and preserve existing utilization totals and earlier planned time.
+- Clean up entities for removed shifts and use configured shift names in HA.
+- Hide/skip already configured discovery endpoints, including disabled machines.
+- Publish tested, versioned amd64 images to GHCR for HA to download without compiling.
+- Stop per-machine workers concurrently to avoid cumulative shutdown delays.
+
+
 ## 0.2.0
 
 - Separate 250 ms fast, 1 s status and 60 s diagnostic/program read groups.

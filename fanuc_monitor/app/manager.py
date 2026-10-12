@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from .collector import CollectionError
 from .models import MachineInput
 from .utilization import Utilization
+from .schedule import ScheduleStore
 
 
 def utc():
@@ -18,7 +19,8 @@ class Manager:
         self.store, self.publisher, self.collector_factory = store, publisher, collector_factory
         self.records = {item["id"]: {**item, **MachineInput.model_validate({k:v for k,v in item.items() if k not in ("id",)}).model_dump(exclude={"revision"})}
                         for item in store.data["machines"]}
-        self.utilization = Utilization(store.path.parent / "utilization.sqlite")
+        self.schedule=ScheduleStore(store.path.parent / "schedule.json")
+        self.utilization = Utilization(store.path.parent / "utilization.sqlite",schedule=self.schedule)
         self.boosts = {}
         self.status = {}
         self.tasks = {}
@@ -26,6 +28,14 @@ class Manager:
         self.lock = asyncio.Lock()
         self.control_tasks = set()
         self.publisher.on_control = self.control
+
+    async def save_schedule(self,value):
+        async with self.lock:
+            changed=self.schedule.save(value)
+            if changed:
+                self.utilization.flush()
+                for wake in self.wakes.values(): wake.set()
+            return self.schedule.view()
 
     def control(self, identity, setting, payload):
         if identity not in self.records or setting not in ("boost","boost_minutes","boost_interval"):
@@ -145,9 +155,15 @@ class Manager:
         due = {"fast": 0, "status": 0, "slow": 0}
         last_stats = 0
         previous_boost = None
+        schedule_revision=self.schedule.revision
         try:
             while True:
                 started = time.monotonic()
+                if schedule_revision!=self.schedule.revision:
+                    schedule_revision=self.schedule.revision
+                    readings={n:s for n,s in readings.items() if s.get("group")!="utilization"}
+                    last_stats=0
+                    due["fast"]=0
                 boost = self.boosts.get(identity)
                 if boost and boost[0] <= started:
                     self.boosts.pop(identity, None); boost = None
@@ -249,8 +265,7 @@ class Manager:
         return items
 
     async def close(self):
-        for identity in list(self.tasks):
-            await self.stop_one(identity)
+        await asyncio.gather(*(self.stop_one(identity) for identity in list(self.tasks)))
         if self.control_tasks:
             await asyncio.gather(*self.control_tasks,return_exceptions=True)
         self.utilization.close()

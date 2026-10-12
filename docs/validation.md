@@ -1,5 +1,18 @@
 # Validation
 
+## 0.3.0 — October 12, 2026
+
+Local validation: **63 Python tests passed**, including schedule validation,
+overnight/week-boundary overlap, daylight-saving elapsed time, prospective schedule
+edits, restart persistence, optimistic revision checks, timezone changes without
+losing current totals, and discovery filtering for configured/custom-port endpoints.
+The JavaScript syntax check passed. The native read/session allowlist is unchanged.
+
+The release branch builds and publishes the prebuilt image only after the complete
+validation/container checks pass. Anonymous GHCR access must pass before promotion
+to main. See the workflow run for current registry/build status.
+
+
 ## 0.2.0 — October 12, 2026
 
 Local validation: **48 Python tests passed**, .NET Release build passed with no

@@ -7,47 +7,38 @@ import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
+from .schedule import ScheduleStore, defaults, day_shifts
 
 UTC = timezone.utc
 
 
-def shifts(day, zone):
-    if day.weekday() >= 5:
-        return []
-    midnight = datetime.combine(day, datetime.min.time(), zone)
-    result = []
-    for number, offset in ((1, 6), (2, 16)):
-        start = midnight + timedelta(hours=offset)
-        end = start + timedelta(hours=10)
-        breaks = [(start + timedelta(minutes=a), start + timedelta(minutes=b))
-                  for a, b in ((150, 160), (300, 330), (450, 460))]
-        result.append((f"{day.isoformat()}_{number}", start.timestamp(), end.timestamp(),
-                       [(a.timestamp(), b.timestamp()) for a, b in breaks]))
-    return result
+def shifts(day, zone, schedule=None):
+    config=schedule or defaults().model_copy(update={"timezone":str(zone)})
+    return day_shifts(day,config)
 
 
-def segments(start, end, zone):
-    """Yield scheduled intervals, excluding breaks; anchor overnight to start day."""
-    day = datetime.fromtimestamp(start, zone).date() - timedelta(days=1)
-    last = datetime.fromtimestamp(end, zone).date()
-    while day <= last:
-        for identity, a, b, breaks in shifts(day, zone):
-            cursor = a
-            for c, d in breaks + [(b, b)]:
-                left, right = max(start, cursor), min(end, c)
-                if right > left:
-                    yield identity, left, right
-                cursor = d
-        day += timedelta(days=1)
+def segments(start,end,zone,schedule=None):
+    day=datetime.fromtimestamp(start,zone).date()-timedelta(days=1)
+    last=datetime.fromtimestamp(end,zone).date()
+    while day<=last:
+        for identity,a,b,breaks in shifts(day,zone,schedule):
+            cursor=a
+            for c,d in breaks+[(b,b)]:
+                left,right=max(start,cursor),min(end,c)
+                if right>left: yield identity,left,right
+                cursor=d
+        day+=timedelta(days=1)
 
 
-def planned(start, end, zone):
-    return sum(b-a for _, a, b in segments(start, end, zone)) if end > start else 0
+def planned(start,end,zone):
+    return sum(b-a for _,a,b in segments(start,end,zone)) if end>start else 0
 
 
 class Utilization:
-    def __init__(self, path, timezone_name="America/Chicago"):
-        self.zone = ZoneInfo(timezone_name)
+    def __init__(self, path, timezone_name="America/Chicago", schedule=None):
+        self.schedule=schedule or ScheduleStore()
+        if schedule is None and timezone_name!="America/Chicago":
+            self.schedule.epochs[0]=(0,defaults().model_copy(update={"timezone":timezone_name}))
         self.db = sqlite3.connect(path)
         if self.db.execute("PRAGMA user_version").fetchone()[0] not in (0,1):
             self.db.close()
@@ -66,21 +57,34 @@ class Utilization:
         self.last_flush = time.monotonic()
         self.last_cleanup = 0
 
+    @property
+    def zone(self): return ZoneInfo(self.schedule.current.timezone)
+
+    def segments(self,start,end):
+        for a,b,config in self.schedule.windows(start,end):
+            yield from segments(a,b,ZoneInfo(config.timezone),config)
+
+    def calendar_label(self,name,stamp,zone=None):
+        local=datetime.fromtimestamp(stamp,zone or ZoneInfo(self.schedule.at(stamp).timezone))
+        return local.date().isoformat() if name=="week" else local.strftime("%Y-%m")
+
     def machine(self, identity):
         self.db.execute("INSERT OR IGNORE INTO machines(uuid) VALUES (?)", (identity,))
         return self.db.execute("SELECT id FROM machines WHERE uuid=?", (identity,)).fetchone()[0]
 
     def boundaries(self, stamp):
-        local = datetime.fromtimestamp(stamp, self.zone)
+        config=self.schedule.at(stamp)
+        zone=ZoneInfo(config.timezone)
+        local = datetime.fromtimestamp(stamp, zone)
         day = local.date()
-        week = datetime.combine(day - timedelta(days=day.weekday()), datetime.min.time(), self.zone)
-        month = datetime.combine(day.replace(day=1), datetime.min.time(), self.zone)
+        week = datetime.combine(day - timedelta(days=day.weekday()), datetime.min.time(), zone)
+        month = datetime.combine(day.replace(day=1), datetime.min.time(), zone)
         # Shift ownership defines the production week/month, including Friday's overnight tail.
-        for _, a, b, _ in shifts(day - timedelta(days=1), self.zone):
+        for _, a, b, _ in shifts(day - timedelta(days=1), zone,config):
             if a <= stamp < b:
-                anchor = datetime.fromtimestamp(a, self.zone).date()
-                week = datetime.combine(anchor - timedelta(days=anchor.weekday()), datetime.min.time(), self.zone)
-                month = datetime.combine(anchor.replace(day=1), datetime.min.time(), self.zone)
+                anchor = datetime.fromtimestamp(a, zone).date()
+                week = datetime.combine(anchor - timedelta(days=anchor.weekday()), datetime.min.time(), zone)
+                month = datetime.combine(anchor.replace(day=1), datetime.min.time(), zone)
         return {"week": week.timestamp(), "month": month.timestamp()}
 
     def observe(self, identity, signals, stamp=None, max_gap=2):
@@ -92,7 +96,7 @@ class Utilization:
         self.previous[identity] = (stamp, known, production)
         if old and known and old[1] and 0 < stamp-old[0] <= max_gap:
             machine = self.machine(identity)
-            for shift, left, right in segments(old[0], stamp, self.zone):
+            for shift, left, right in self.segments(old[0], stamp):
                 cursor = left
                 while cursor < right:
                     end = min(right, (int(cursor // 60)+1)*60)
@@ -105,8 +109,13 @@ class Utilization:
                         (machine, minute, running, duration))
                     buckets = self.boundaries(cursor)
                     anchor = datetime.fromisoformat(shift[:10]).date()
-                    shift_start = datetime.combine(anchor,datetime.min.time(),self.zone) + timedelta(hours=6 if shift[-1]=="1" else 16)
-                    for name, start in {**buckets, "shift_"+shift[-1]: shift_start.timestamp()}.items():
+                    config=self.schedule.at(cursor)
+                    shift_start=next(a for label,a,b,br in day_shifts(anchor,config) if label==shift)
+                    for name,start in {**buckets,"shift_"+shift.rsplit("_",1)[1]:shift_start}.items():
+                        if name in ("week","month"):
+                            previous=self.db.execute("SELECT start FROM periods WHERE machine=? AND period=?",(machine,name)).fetchone()
+                            if previous and self.calendar_label(name,previous[0])==self.calendar_label(name,start,ZoneInfo(config.timezone)):
+                                start=previous[0]
                         self.db.execute('''INSERT INTO periods VALUES (?,?,?,?,?) ON CONFLICT(machine,period)
                             DO UPDATE SET start=excluded.start,
                             production=CASE WHEN start=excluded.start THEN production+excluded.production ELSE excluded.production END,
@@ -123,6 +132,7 @@ class Utilization:
             cutoff = int((stamp - 7*86400) // 60 + 1)*60
             self.db.execute("DELETE FROM minutes WHERE minute < ?", (cutoff,))
             self.last_cleanup = stamp
+            self.schedule.prune(stamp)
         if time.monotonic() - self.last_flush >= 15:
             self.flush()
 
@@ -132,26 +142,30 @@ class Utilization:
         self.maintain(stamp)
         windows = {"24h": (stamp-86400, stamp), **{k:(v,stamp) for k,v in self.boundaries(stamp).items()}}
         day = datetime.fromtimestamp(stamp,self.zone).date()
-        for number in (1,2):
-            candidates = [item for offset in range(8) for item in shifts(day-timedelta(days=offset),self.zone)
+        for number in range(1,len(self.schedule.current.shifts)+1):
+            candidates = [item for offset in range(8) for item in shifts(day-timedelta(days=offset),self.zone,self.schedule.current)
                           if item[0].endswith('_'+str(number)) and item[1] <= stamp]
             if candidates:
                 _,a,b,_ = max(candidates,key=lambda s:s[1])
                 windows['shift_'+str(number)] = (a,min(b,stamp))
         result = {}
         for name,(start,end) in windows.items():
-            denominator = planned(start,end,self.zone)
             if name in ("week","month"):
-                anchor = datetime.fromtimestamp(start,self.zone).date().isoformat()
-                denominator = sum(b-a for shift,a,b in segments(start,end,self.zone) if shift[:10]>=anchor)
-            if name == '24h':
+                row=self.db.execute("SELECT start,production,observed FROM periods WHERE machine=? AND period=?",(machine,name)).fetchone()
+                if row and self.calendar_label(name,row[0])==self.calendar_label(name,start,self.zone):
+                    start=row[0]
+                else: row=None
+            denominator=sum(b-a for _,a,b in self.segments(start,end))
+            if name in ("week","month"):
+                anchor=datetime.fromtimestamp(start,ZoneInfo(self.schedule.at(start).timezone)).date().isoformat()
+                denominator=sum(b-a for shift,a,b in self.segments(start,end) if shift[:10]>=anchor)
+            if name == '24h' or name.startswith('shift_'):
                 rows = self.db.execute("SELECT minute,production,observed FROM minutes WHERE machine=? AND minute+60>? AND minute<?",(machine,start,end)).fetchall()
                 # Minute totals give rolling-window boundary accuracy of one minute.
-                p = sum(p*max(0,min(m+60,end)-max(m,start))/60 for m,p,o in rows)
-                o = sum(o*max(0,min(m+60,end)-max(m,start))/60 for m,p,o in rows)
+                p = sum(p*(max(0,m+60-start)/60 if m<start else 1) for m,p,o in rows)
+                o = sum(o*(max(0,m+60-start)/60 if m<start else 1) for m,p,o in rows)
             else:
-                row = self.db.execute("SELECT start,production,observed FROM periods WHERE machine=? AND period=?",(machine,name)).fetchone()
-                p,o = row[1:] if row and row[0] == start else (0,0)
+                p,o = row[1:] if row else (0,0)
             p,o = min(p,denominator),min(o,denominator)
             result[name] = {"production_seconds": round(p,2), "planned_seconds": round(denominator,2),
                             "unknown_seconds": round(max(0,denominator-o),2),
@@ -165,7 +179,8 @@ class Utilization:
         result = {}
         for period,values in self.summary(identity,stamp).items():
             for field,unit in (("utilization","%"),("coverage","%"),("production_seconds","s"),("planned_seconds","s"),("unknown_seconds","s")):
-                result[f"production_{period}_{field}"] = {"value":values[field],"unit":unit,"kind":"sensor","source":"monitor.confirmed_feed_utilization","group":"utilization"}
+                label=(self.schedule.current.shifts[int(period.split("_")[1])-1].name+" "+field.replace("_"," ")) if period.startswith("shift_") else "Production "+period+" "+field.replace("_"," ")
+                result[f"production_{period}_{field}"] = {"label":label,"value":values[field],"unit":unit,"kind":"sensor","source":"monitor.confirmed_feed_utilization","group":"utilization"}
         return result
 
     def remove(self, identity):

@@ -13,6 +13,7 @@ from .collector import CollectionError, factory
 from .manager import Manager
 from .models import Endpoint, MachineInput, ScanInput, BoostInput
 from .discovery import Discovery
+from .schedule import ScheduleInput
 from .mqtt import Publisher
 from .store import Store
 
@@ -89,6 +90,7 @@ def create_app(directory=None, options=None, collector_factory=None, publisher=N
                         if not health["online"]:
                             now = utc()
                             values = manager.utilization.signals(identity)
+                            health["signals"]={n:s for n,s in health["signals"].items() if s.get("group")!="utilization"}
                             for name,signal in values.items():
                                 signal.update(last_read=now,expire_after=30)
                                 health["signals"][name] = signal
@@ -150,21 +152,26 @@ def create_app(directory=None, options=None, collector_factory=None, publisher=N
         return {"csrf": csrf, "mode": options.get("mode", "simulation"),
                 "hardware_testing_enabled": options.get("hardware_testing_enabled", False),
                 "mqtt_connected": pub.connected, "mqtt_error": pub.error,
-                "startup_error": app.state.error, "machines": manager.list(), "discovery": app.state.discovery.state}
+                "startup_error": app.state.error, "machines": manager.list(), "discovery": app.state.discovery.view(manager.records.values()), "schedule": manager.schedule.view()}
+
+    @app.put("/api/schedule")
+    async def save_schedule(value: ScheduleInput):
+        try: return await app.state.manager.save_schedule(value)
+        except ValueError as error: raise HTTPException(409,str(error)) from error
 
     @app.post("/api/discovery")
     async def scan(value: ScanInput):
         if app.state.error: raise HTTPException(409,app.state.error)
         try:
-            app.state.discovery.start(value.network,value.port)
+            app.state.discovery.start(value.network,value.port,app.state.manager.records.values())
         except ValueError as error:
             raise HTTPException(409,str(error)) from error
-        return app.state.discovery.state
+        return app.state.discovery.view(app.state.manager.records.values())
 
     @app.delete("/api/discovery")
     async def cancel_scan():
         await app.state.discovery.close()
-        return app.state.discovery.state
+        return app.state.discovery.view(app.state.manager.records.values())
 
     @app.post("/api/machines/{identity}/boost")
     async def boost(identity: uuid.UUID, value: BoostInput):
@@ -245,7 +252,7 @@ def create_app(directory=None, options=None, collector_factory=None, publisher=N
     async def diagnostics():
         return {"mode": options.get("mode", "simulation"), "machines": app.state.manager.list(),
                 "mqtt_connected": app.state.publisher.connected,
-                "pending_mqtt_topics": len(app.state.publisher.dirty)}
+                "pending_mqtt_topics": len(app.state.publisher.dirty), "schedule": app.state.manager.schedule.view()}
 
     return app
 

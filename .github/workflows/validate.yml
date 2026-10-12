@@ -1,5 +1,8 @@
 name: Isolated validation
 on: [push, pull_request, workflow_dispatch]
+concurrency:
+  group: fanuc-${{ github.ref }}
+  cancel-in-progress: false
 permissions:
   contents: read
 jobs:
@@ -22,5 +25,61 @@ jobs:
       - run: docker build --tag fanuc-monitor:test fanuc_monitor
       - run: docker run --rm --entrypoint dotnet fanuc-monitor:test /opt/worker/Monitor.Worker.dll --self-test
       - run: docker run --rm --network none --entrypoint dotnet fanuc-monitor:test /opt/worker/Monitor.Worker.dll --native-self-test
-      # No image upload or registry push while SDK redistribution rights and
-      # real HA/Fanuc acceptance are unresolved. No production endpoints.
+
+  publish:
+    needs: test
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/'))
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install PyYAML==6.0.2
+      - name: Read version and image name
+        run: |
+          python - <<'PYVERSION'
+          import os,re,yaml
+          config=yaml.safe_load(open('fanuc_monitor/config.yaml'))
+          version=str(config['version'])
+          image=config['image']
+          assert re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+',version)
+          assert image=='ghcr.io/hubertpi/fanuc-cnc-monitor'
+          with open(os.environ['GITHUB_ENV'],'a') as output:
+              output.write(f'ADDON_VERSION={version}\nADDON_IMAGE={image}:{version}\n')
+          PYVERSION
+      - name: Authenticate to GHCR
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io --username "${{ github.actor }}" --password-stdin
+      - name: Build, test and publish immutable image
+        run: |
+          if docker manifest inspect "$ADDON_IMAGE" >/dev/null 2>&1; then
+            docker pull "$ADDON_IMAGE"
+            revision=$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$ADDON_IMAGE")
+            if [ "$revision" != "$GITHUB_SHA" ]; then
+              echo 'This version already exists for another commit. Bump the add-on version before publishing.'
+              exit 1
+            fi
+          else
+            docker build --platform linux/amd64 --build-arg BUILD_VERSION="$ADDON_VERSION" --label org.opencontainers.image.revision="$GITHUB_SHA" --tag "$ADDON_IMAGE" fanuc_monitor
+            docker run --rm --network none --entrypoint dotnet "$ADDON_IMAGE" /opt/worker/Monitor.Worker.dll --self-test
+            docker run --rm --network none --entrypoint dotnet "$ADDON_IMAGE" /opt/worker/Monitor.Worker.dll --native-self-test
+            docker push "$ADDON_IMAGE"
+          fi
+      - name: Check anonymous download access
+        run: |
+          if python tools/check_image.py "$ADDON_IMAGE"; then
+            echo "Public image ready: $ADDON_IMAGE" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$GITHUB_REF" = 'refs/heads/main' ]; then
+            echo 'HA must be able to pull the image anonymously.'
+            exit 1
+          else
+            echo 'Image is published. Set its package visibility to Public before releasing to main.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Sign out of registry
+        if: always()
+        run: docker logout ghcr.io
