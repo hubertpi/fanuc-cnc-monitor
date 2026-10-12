@@ -16,9 +16,9 @@
     "cnc_rdalmmsg2",
     "cnc_rdopmsg",
     "cnc_modal",
-    "cnc_rdopnlsgnl",
     "cnc_acts2",
     "cnc_rddiaginfo",
-    "cnc_diagnoss"
+    "cnc_diagnoss",
+    "pmc_rdpmcrng"
   ]
 }

@@ -57,16 +57,22 @@ removed shift entities are removed from MQTT discovery.
 
 ## Reading interpretation
 
-- `spindle_rpm` preserves the original CNC-selected spindle reading. Individual
-  `spindle_N_rpm` entities use specified-spindle `cnc_acts2` reads.
-- Feed override selects the documented software-panel field and converts valid
-  codes 0–20 to 0–200%. Unsupported or invalid values create no percent sensor.
-- `tool_code` formats the modal T code with at least four digits. On a lathe it can
-  contain both tool and offset; it is not universally the physical tool number.
+- Individual `spindle_N_rpm` entities use specified-spindle `cnc_acts2` reads.
+  The CNC-selected `spindle_rpm` entity is a fallback only; it is removed when
+  numbered RPM reads succeed, including valid zero RPM.
+- Feed override reads the fixed PMC G12 byte and decodes its active-low value
+  as `255 - raw_byte`, supporting 0–254%. Unsupported, reserved or malformed
+  responses create no percent sensor. Confirm against the actual override knob.
+- `tool_code` preserves the modal T code: T/TT/MT controllers use at least four
+  digits, M/MM at least two, and unknown types retain their full reported code
+  with a T prefix. Lathe codes can contain tool and offset; separate mill offsets
+  are not synthesized. Program numbers have an O prefix and at least four digits.
 - Axis overtravel derives from axis-qualified OT alarms, not generic alarm presence.
 - Temperature mappings: diagnostic 308 motor, 309 encoder, 403 spindle motor.
   Power mappings: 4901 servo, 4902 spindle. Diagnostic existence and data type are
-  checked before reading. Confirm meanings/units against the controller manual.
+  checked before reading. Zero-only temperature entities are suppressed; previously
+  validated temperatures become unavailable on 0°C. Other measurement zeros remain
+  valid. Confirm meanings/units against the controller manual.
 - Unsupported readings create no placeholders. Failed optional readings are removed
   until a valid reading returns. Slow readings retain their actual acquisition time.
 
@@ -87,7 +93,9 @@ A normal stop flushes them. Do not delete the journal to fix a broker issue: doi
 can orphan MQTT discovery identities.
 
 HA Core and MQTT are independent of CNC collection. The add-on starts in Supervisor's
-services stage; MQTT availability is retried. Utilization and coverage remain visible during CNC outages; live CNC readings become unavailable.
+services stage; MQTT availability is retried. OEE percentages remain visible during CNC outages; live CNC readings become
+unavailable. Duration and coverage accounting are internal and included in diagnostic
+exports, with no separate HA entities.
 Monitoring gaps count as unknown time
 and do not add production. Breaks are excluded from numerator and denominator.
 Rolling 24-hour values have minute-level boundary accuracy. Week/month ownership

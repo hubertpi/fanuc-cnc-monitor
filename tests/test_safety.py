@@ -53,8 +53,11 @@ def test_binding_hash_is_portable_but_rejects_changed_source():
 def test_worker_calls_match_exact_read_session_allowlist():
     data = json.loads((WORKER / "allowlist.json").read_text())
     allow = set(data["read"] + data["session"])
-    calls = set(re.findall(r'Focas\.(cnc_\w+)\s*\(', (WORKER / "Program.cs").read_text()))
+    calls = set(re.findall(r'Focas\.((?:cnc|pmc)_\w+)\s*\(', (WORKER / "Program.cs").read_text()))
     assert calls == allow
+    source=(WORKER / "Program.cs").read_text()
+    assert 'Focas.pmc_rdpmcrng(handle, 0, 0, 12, 12, 9, overrideData)' in source
+    assert 'pmc_wrpmcrng' not in allow
     assert not any(re.search(r'wr|upload|download|reset|start$|stop$', name) for name in allow)
     generated = WORKER / "RestrictedFocas.generated.cs"
     if generated.exists():

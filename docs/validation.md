@@ -1,5 +1,21 @@
 # Validation
 
+## 0.3.1 — October 12, 2026
+
+Local validation: **65 Python tests passed**, .NET Release build and both worker
+self-tests passed. Tests cover fixed G12 address/type/length, genuine zero and
+above-100% override decoding, malformed/reserved response suppression, MT tool
+and O-number formatting, numbered RPM replacing the selected-spindle fallback,
+zero-temperature handling, persistent temperature capability migration, and OEE
+helper removal with stable percentage identities. JavaScript syntax and diff
+whitespace checks passed. The binding still exposes four session functions and
+fourteen reads, replacing the software-panel read with the fixed PMC read.
+
+The staging workflow validates the full container and publishes the image before
+promotion to main. Override values and temperature meanings still require
+comparison with each installed CNC; these are software tests, not live hardware
+qualification.
+
 ## 0.3.0 — October 12, 2026
 
 Local validation: **63 Python tests passed**, including schedule validation,

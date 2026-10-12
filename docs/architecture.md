@@ -10,7 +10,9 @@ The generated binding retains only the exact functions in
 `fanuc_monitor/worker/allowlist.json`: four session/process functions and fourteen
 reads. Source preparation verifies the immutable upstream SHA-256, resolves the
 Linux ABI and rejects unrecognized imports or altered entry points. Tests require
-worker calls and generated imports to match the allowlist exactly.
+worker calls and generated imports to match the allowlist exactly. Feed override
+uses only `pmc_rdpmcrng` at fixed G12, one byte, with returned address/type validation.
+No address or PMC operation can be supplied through an API request.
 
 No CNC start/stop/reset/jog, spindle/feed commands, program transfer, parameter
 writes or PMC writes are available through the binding. The underlying third-party

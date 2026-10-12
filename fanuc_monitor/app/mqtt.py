@@ -25,6 +25,21 @@ class Publisher:
             raise ValueError("Unsupported MQTT journal version")
         self.root = "fanuc_monitor/" + self.journal["installation"]
         self.online_topic = self.root + "/availability"
+        self.valid_temperatures=set(self.journal.get("valid_temperatures",[]))
+        # Migrate previously published positive temperature readings before
+        # startup clears state. Zero-only legacy entities are not validated.
+        for topic,payload in list(self.journal["topics"].items()):
+            if topic.startswith("homeassistant/device/") and payload:
+                config=json.loads(payload)
+                identity=config.get("device",{}).get("identifiers",[None])[0]
+                for component in config.get("components",{}).values():
+                    state=self.journal["topics"].get(component.get("state_topic"),"")
+                    if component.get("unit_of_measurement")=="°C" and identity and state:
+                        value=json.loads(state).get("value")
+                        if isinstance(value,(int,float)) and value>0:
+                            self.valid_temperatures.add(identity+"/"+component["state_topic"].rsplit("/",1)[1])
+        self.journal["valid_temperatures"]=sorted(self.valid_temperatures)
+        self.needs_flush=True
         self.connected = False
         self.dirty = set(self.journal["topics"])
         self.inflight = {}
@@ -128,6 +143,9 @@ class Publisher:
     def machine_root(self, identity):
         return self.root + "/machine/" + identity
 
+    def temperature_validated(self,identity,name):
+        return identity+"/"+key(name) in self.valid_temperatures
+
     def discovery_topic(self, identity):
         return "homeassistant/device/fanuc_" + self.journal["installation"] + "/" + identity + "/config"
 
@@ -154,6 +172,10 @@ class Publisher:
             }
             if signal.get("group") == "utilization":
                 component["availability"] = [{"topic":self.online_topic}]
+            if signal.get("unit")=="°C":
+                component["availability"].append({"topic":root+"/signal/"+slug,
+                    "value_template":"{{ 'online' if value_json.available | default(true) else 'offline' }}"})
+                component.update(device_class="temperature",state_class="measurement")
             if component["platform"] == "binary_sensor":
                 component.update(payload_on="ON", payload_off="OFF")
             if signal.get("unit"):
@@ -194,7 +216,7 @@ class Publisher:
         self.put(self.discovery_topic(identity), {
             "device": {"identifiers": [identity], "name": machine["name"],
                        "manufacturer": "FANUC", "model": controller.get("model", "Fanuc CNC")},
-            "origin": {"name": "Fanuc CNC Monitor", "sw_version": "0.3.0"},
+            "origin": {"name": "Fanuc CNC Monitor", "sw_version": "0.3.1"},
             "components": components,
         })
         expected = {root + "/signal/" + key(name) for name in signals}
@@ -204,6 +226,12 @@ class Publisher:
 
     def state(self, identity, name, signal, read_at, simulation):
         value = signal["value"]
+        if signal.get("unit")=="°C" and signal.get("available",True) and isinstance(value,(int,float)) and value>0:
+            marker=identity+"/"+key(name)
+            if marker not in self.valid_temperatures:
+                self.valid_temperatures.add(marker)
+                self.journal["valid_temperatures"]=sorted(self.valid_temperatures)
+                self.needs_flush=True
         details = None
         if signal.get("kind") == "binary_sensor":
             value = "ON" if value else "OFF"
@@ -215,9 +243,12 @@ class Publisher:
             value = value[:252] + "…"
         self.put(self.machine_root(identity) + "/signal/" + key(name), {
             "value": value, "source": signal["source"], "last_read": read_at,
-            "simulation": simulation, "details": details})
+            "simulation": simulation, "details": details, "available":signal.get("available",True)})
 
     def remove(self, identity):
+        self.valid_temperatures={marker for marker in self.valid_temperatures if not marker.startswith(identity+"/")}
+        self.journal["valid_temperatures"]=sorted(self.valid_temperatures)
+        self.needs_flush=True
         prefix = self.machine_root(identity) + "/"
         for topic in list(self.journal["topics"]):
             if topic.startswith(prefix) or topic == self.discovery_topic(identity):

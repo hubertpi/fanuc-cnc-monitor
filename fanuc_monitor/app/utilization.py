@@ -176,11 +176,17 @@ class Utilization:
         return result
 
     def signals(self, identity, stamp=None):
+        # HA gets the requested OEE percentages only. Detailed duration/coverage
+        # accounting stays internal and is available through diagnostics.
         result = {}
+        labels={"24h":"OEE","week":"OEE Week","month":"OEE Month"}
+        ordinals={1:"1st",2:"2nd",3:"3rd"}
         for period,values in self.summary(identity,stamp).items():
-            for field,unit in (("utilization","%"),("coverage","%"),("production_seconds","s"),("planned_seconds","s"),("unknown_seconds","s")):
-                label=(self.schedule.current.shifts[int(period.split("_")[1])-1].name+" "+field.replace("_"," ")) if period.startswith("shift_") else "Production "+period+" "+field.replace("_"," ")
-                result[f"production_{period}_{field}"] = {"label":label,"value":values[field],"unit":unit,"kind":"sensor","source":"monitor.confirmed_feed_utilization","group":"utilization"}
+            if period.startswith("shift_"):
+                number=int(period.split("_")[1])
+                label=ordinals.get(number,str(number)+"th")+" Shift OEE"
+            else: label=labels[period]
+            result[f"production_{period}_utilization"] = {"label":label,"value":values["utilization"],"unit":"%","kind":"sensor","source":"monitor.confirmed_feed_utilization","group":"utilization"}
         return result
 
     def remove(self, identity):

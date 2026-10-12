@@ -252,7 +252,8 @@ def create_app(directory=None, options=None, collector_factory=None, publisher=N
     async def diagnostics():
         return {"mode": options.get("mode", "simulation"), "machines": app.state.manager.list(),
                 "mqtt_connected": app.state.publisher.connected,
-                "pending_mqtt_topics": len(app.state.publisher.dirty), "schedule": app.state.manager.schedule.view()}
+                "pending_mqtt_topics": len(app.state.publisher.dirty), "schedule": app.state.manager.schedule.view(),
+                "production_accounting":{identity:app.state.manager.utilization.summary(identity) for identity in app.state.manager.records}}
 
     return app
 

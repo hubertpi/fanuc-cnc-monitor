@@ -196,6 +196,9 @@ class Manager:
                     status.update(online=True, last_success=now, error=None, error_code=None,
                                   controller=result["controller"], unsupported=copy.deepcopy(unsupported))
                     incoming = copy.deepcopy(result["signals"])
+                    for name,signal in list(incoming.items()):
+                        if signal.get("unit")=="°C" and signal.get("available") is False and not self.publisher.temperature_validated(identity,name):
+                            del incoming[name]
                     for name in list(readings):
                         if readings[name].get("group", "fast") in groups and name not in incoming:
                             del readings[name]
@@ -223,7 +226,7 @@ class Manager:
                     for name, signal in signals.items():
                         old = sent_values.get(name)
                         # Refresh before HA expire_after, even if value hasn't changed.
-                        if old is None or old[0].get("value") != signal.get("value") or old[0].get("source") != signal.get("source") or time.monotonic() - old[1] >= max(5,signal.get("expire_after",15)/3):
+                        if old is None or old[0].get("value") != signal.get("value") or old[0].get("source") != signal.get("source") or old[0].get("available",True) != signal.get("available",True) or time.monotonic() - old[1] >= max(5,signal.get("expire_after",15)/3):
                             self.publisher.state(identity, name, signal, signal.get("last_read",now), result.get("simulation", False))
                             sent_values[name] = (copy.deepcopy(signal), time.monotonic())
                         signal.setdefault("last_read", now)

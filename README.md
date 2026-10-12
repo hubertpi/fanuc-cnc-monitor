@@ -39,10 +39,20 @@ in the Web UI or Home Assistant. HA controls change **only the add-on's polling*
 A restart cancels active boosts. No CNC controls or write functions are exposed.
 
 Only successful, validated readings create measurement entities. Unsupported
-functions appear in diagnostics; zeros returned by successful reads remain valid.
+functions appear in diagnostics. Zero RPM, feedrate, load, power and override remain
+valid. Zero-only temperature sensors are suppressed; a previously validated
+temperature becomes unavailable if it later returns 0°C.
 Every reported spindle gets an individual RPM reading when `cnc_acts2` is supported.
+The CNC-selected, unnumbered RPM sensor is removed when numbered RPM readings
+are available; otherwise it remains as a fallback.
 Additional motor/encoder temperatures and motor power depend on controller support.
 The current reader uses the default FOCAS path, up to four spindles and eight axes.
+
+Program numbers use `Oxxxx`. Tool codes preserve the controller-reported number:
+`T`/`TT`/`MT` controllers use at least four digits, and `M`/`MM` use at least two.
+Separate mill offsets are not combined into the tool code. Feed override reads
+the fixed, active-low PMC G12 byte; unsupported or malformed reads are not
+converted into a fabricated 0%. Compare the reading with each CNC’s actual knob.
 
 ## Production utilization
 
@@ -62,8 +72,11 @@ America/Chicago, Monday–Friday:
 
 The default shifts each have **550 planned minutes** after breaks. Overnight shifts belong to
 their starting workday, including Friday's shift ending Saturday. In-progress
-percentages use elapsed planned time. Entities cover both shifts, rolling 24 hours,
-week and month, including production time, planned time, unknown time and coverage.
+percentages use elapsed planned time. HA exposes percentage sensors named
+**1st Shift OEE**, **2nd Shift OEE**, **OEE** (rolling 24 hours), **OEE Week** and
+**OEE Month**. Additional configured shifts get their corresponding numbered OEE
+sensors. Duration and coverage accounting remain internal and in diagnostic exports;
+obsolete helper entities are removed automatically. Existing entity IDs are preserved.
 Monitoring gaps remain in planned time but add no confirmed production.
 
 Collection and local counters continue during HA Core or MQTT outages, provided

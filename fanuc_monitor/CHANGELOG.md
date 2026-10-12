@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.1
+
+- Read feed override from the fixed, read-only PMC G12 byte; preserve genuine 0% and overrides above 100%.
+- Format program numbers as Oxxxx and tool codes by detected machine type; MT uses lathe formatting.
+- Remove redundant CNC-selected RPM entities when numbered spindle RPM is available.
+- Suppress zero-only temperature entities; previously validated temperatures become unavailable on 0°C.
+- Expose only OEE percentages with the requested names; remove duration/coverage helper entities while retaining internal accounting.
+- Preserve existing sensor identities and persist validated temperature capability across restarts.
+
 ## 0.3.0
 
 - Add a shared UI editor for 1–8 shifts, names, start/end times, breaks, working days and timezone.

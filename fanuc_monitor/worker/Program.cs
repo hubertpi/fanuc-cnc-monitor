@@ -8,9 +8,14 @@ using l99.driver.fanuc;
 internal static class Program
 {
     static object? cachedController;
+    static string machineType = "";
     static int spindleCount;
     static Dictionary<int, short> diagnosticTypes = new();
     static string Text(char[] value) => new string(value ?? Array.Empty<char>()).Trim('\0', ' ');
+    internal static string FormatTool(int number, string type) => "T" + number.ToString(
+        type.Trim() is "T" or "TT" or "MT" ? "D4" : type.Trim() is "M" or "MM" ? "D2" : "D");
+    internal static string FormatProgram(int number) => "O" + number.ToString("D4");
+    internal static int FeedOverride(byte raw) => 255 - raw;
     internal static double Scale(int value, short decimals)
     {
         if (decimals < -9 || decimals > 9) throw new InvalidOperationException("Invalid FOCAS decimal scale");
@@ -54,7 +59,7 @@ internal static class Program
         {
             if (endpoint is null) return;
             endpoint = null;
-            cachedController = null; spindleCount = 0; diagnosticTypes.Clear();
+            cachedController = null; machineType = ""; spindleCount = 0; diagnosticTypes.Clear();
             release(handle);
         }
     }
@@ -104,6 +109,7 @@ internal static class Program
             {
                 Require(Focas.cnc_sysinfo(handle, system), "cnc_sysinfo");
                 string family = Text(system.cnc_type) + (((system.addinfo & 2) != 0) ? "i" : "");
+                machineType = Text(system.mt_type);
                 cachedController = new {series = family, firmware_series = Text(system.series), version = Text(system.version),
                     type = Text(system.mt_type), axes = Text(system.axes), model = "Fanuc " + family,
                     path_scope = "Default FOCAS path"};
@@ -111,8 +117,8 @@ internal static class Program
             string group = "fast";
             var signals = new Dictionary<string, object>();
             var unsupported = new Dictionary<string, object>();
-            void Add(string name, object value, string source, string? unit = null, string kind = "sensor") =>
-                signals[name] = new {value, source, unit, kind, group};
+            void Add(string name, object? value, string source, string? unit = null, string kind = "sensor", bool available = true) =>
+                signals[name] = new {value, source, unit, kind, group, available};
             if (groups.Contains("fast"))
             {
             var state = new Focas.ODBST();
@@ -141,6 +147,8 @@ internal static class Program
                     && actual.data is {Length: > 0})
                     Add("spindle_"+index+"_rpm", actual.data[0], "cnc_acts2."+index, "rpm");
             }
+            if (signals.Keys.Any(name => name != "spindle_rpm" && name.StartsWith("spindle_") && name.EndsWith("_rpm")))
+                signals.Remove("spindle_rpm");
             }
             group = "status";
             if (groups.Contains("status"))
@@ -170,17 +178,26 @@ internal static class Program
             if (Optional(() => Focas.cnc_modal(handle, 108, 0, modal), "cnc_modal", unsupported))
             {
                 Add("raw_modal_tool_code", modal.aux.aux_data, "cnc_modal.108");
-                if (modal.aux.aux_data >= 0) Add("tool_code", modal.aux.aux_data.ToString("D4"), "cnc_modal.108");
+                if (modal.aux.aux_data >= 0) Add("tool_code", FormatTool(modal.aux.aux_data,machineType), "cnc_modal.108");
             }
-            var panel = new Focas.IODBSGNL();
-            if (Optional(() => Focas.cnc_rdopnlsgnl(handle, 32, panel), "cnc_rdopnlsgnl", unsupported))
+            // Fixed read-only G12 byte: FANUC active-low feed override input.
+            // No software-panel fallback: that field did not track the knobs.
+            var overrideData = new Focas.IODBPMC0();
+            if (Optional(() => Focas.pmc_rdpmcrng(handle, 0, 0, 12, 12, 9, overrideData), "pmc_rdpmcrng.G12", unsupported))
             {
-                if ((panel.type & 32) != 0 && panel.feed_ovrd is >= 0 and <= 20)
+                if (overrideData.type_a == 0 && overrideData.type_d == 0
+                    && overrideData.datano_s == 12 && overrideData.datano_e == 12
+                    && overrideData.cdata is {Length: > 0})
                 {
-                    Add("raw_feed_override_code", panel.feed_ovrd, "cnc_rdopnlsgnl.feed_ovrd");
-                    Add("feed_override", panel.feed_ovrd * 10, "cnc_rdopnlsgnl.feed_ovrd", "%");
+                    int percent = FeedOverride(overrideData.cdata[0]);
+                    if (percent <= 254)
+                    {
+                        Add("raw_feed_override_code", overrideData.cdata[0], "pmc_rdpmcrng.G12");
+                        Add("feed_override", percent, "pmc_rdpmcrng.G12.active_low", "%");
+                    }
+                    else unsupported["pmc_rdpmcrng.G12"] = new {error="Reserved feed override value"};
                 }
-                else unsupported["cnc_rdopnlsgnl"] = new {error="Invalid feed override code"};
+                else unsupported["pmc_rdpmcrng.G12"] = new {error="Invalid PMC G12 response metadata"};
             }
             var alarms = new Focas.ODBALMMSG2(); short alarmCount = 10;
             if (Optional(() => Focas.cnc_rdalmmsg2(handle, -1, ref alarmCount, alarms), "cnc_rdalmmsg2", unsupported))
@@ -219,8 +236,8 @@ internal static class Program
             var program = new Focas.ODBPRO();
             if (Optional(() => Focas.cnc_rdprgnum(handle, program), "cnc_rdprgnum", unsupported))
             {
-                Add("program_number", program.data, "cnc_rdprgnum.data");
-                Add("main_program_number", program.mdata, "cnc_rdprgnum.mdata");
+                Add("program_number", FormatProgram(program.data), "cnc_rdprgnum.data");
+                Add("main_program_number", FormatProgram(program.mdata), "cnc_rdprgnum.mdata");
                 int number = program.data; short count = 1; var directory = new Focas.PRGDIR3();
                 if (Optional(() => Focas.cnc_rdprogdir3(handle, 2, ref number, ref count, directory), "cnc_rdprogdir3", unsupported) && count > 0 && directory.dir1.number == program.data)
                     Add("program_comment", directory.dir1.comment.Trim('\0', ' '), "cnc_rdprogdir3.comment");
@@ -249,6 +266,12 @@ internal static class Program
                         if (!Optional(() => Focas.cnc_diagnoss(handle, number, axis, length, data), source, unsupported)) return;
                         int value = expectedType == 1 ? data.cdata : expectedType == 2 ? data.idata : data.ldata;
                         if (value < minimum || value > maximum) { unsupported[source] = new {error="Diagnostic value outside validated range"}; return; }
+                        if (unit == "°C" && value == 0)
+                        {
+                            unsupported[source] = new {error="Zero temperature is treated as unavailable"};
+                            Add(name, null, source, unit, available:false);
+                            return;
+                        }
                         Add(name, value, source, unit);
                     }
                     int count = int.TryParse(Text(system.axes), out int n) ? Math.Clamp(n,0,8) : 0;
@@ -275,6 +298,12 @@ internal static class Program
         {
             SessionSelfTest();
             if (Scale(450, 2) != 4.5 || SpeedUnit(1) != "in/min" || LoadUnit(0) != "%") return 1;
+            if (FormatTool(303,"T") != "T0303" || FormatTool(303,"MT") != "T0303"
+                || FormatTool(303,"TT") != "T0303" || FormatTool(7,"M") != "T07"
+                || FormatTool(7,"MM") != "T07" || FormatTool(123456,"T") != "T123456"
+                || FormatProgram(53) != "O0053" || FormatProgram(123456) != "O123456") return 1;
+            foreach (var pair in new (byte raw,int percent)[] {(255,0),(205,50),(155,100),(135,120),(105,150),(55,200)})
+                if (FeedOverride(pair.raw) != pair.percent) return 1;
             var imports = typeof(Focas).GetMethods().Where(m => m.IsDefined(typeof(DllImportAttribute))).Select(m => m.Name).Distinct().Order().ToArray();
             Console.WriteLine(JsonSerializer.Serialize(new {mapping_tests = "passed", session_tests = "passed", imports}));
             return 0;
