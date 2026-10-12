@@ -1,5 +1,19 @@
 # Validation record
 
+## Persistent sessions — October 12, 2026 (0.1.2-dev)
+
+- Release worker builds with .NET SDK 10.0.401; mapping and session self-tests pass.
+- A fake native library exercises the real worker: successive reads reuse one
+  allocation, unsupported optional groups preserve it, a socket error releases
+  it, a subsequent read reconnects, endpoint changes replace it, and stdin EOF
+  releases the final handle before native process exit. No CNC networking occurs.
+- Real subprocess tests verify cooperative EOF shutdown, worker reuse and forced
+  termination of an unresponsive worker.
+- Full Python suite: 34 tests passed. Real CNC and Supervisor update testing of
+  this version remain pending; the earlier HA validation below used 0.1.0-dev.
+
+## Initial validation
+
 October 10, 2026. All HA tests used simulated CNC data; no production equipment.
 
 Public source snapshot `fe1d4eb` passed [GitHub Actions](https://github.com/hubertpi/fanuc-cnc-monitor/actions/runs/38034117108),

@@ -12,8 +12,11 @@ without its successful test token. There is no subnet scan.
 
 Manager runs one collector task per enabled machine. Edit/disable/remove cancels
 only that task. Each live collector owns a bounded worker process. Synchronous
-FOCAS calls stay on its single main thread; handles are allocated/freed per
-sweep. Transport failures close that worker and back off independently. Overall
+FOCAS calls stay on its single main thread; one session handle is reused across
+successful sweeps. Endpoint changes or failed reads release the handle; transport
+failures close that worker and back off independently. Shutdown sends stdin EOF
+to release the handle before native process cleanup, with a two-second forced
+termination fallback for hung calls. Overall
 freshness is separate from broker connectivity.
 
 The generated native binding contains only worker/allowlist.json imports.

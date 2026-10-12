@@ -40,6 +40,13 @@ without restarting other collectors. Details show source, units, read timestamps
 errors, retries, and MQTT acknowledgement. Discovery acknowledgement confirms
 broker delivery, not proof that HA created an entity.
 
+In FOCAS mode, each machine keeps its own connection open between successful
+polls. These are repeated requests over a persistent connection, not a stream
+pushed by the CNC. Read failures trigger connection cleanup and the existing
+independent reconnect backoff. Editing, disabling, removing or stopping a machine
+closes its worker and session; a hung worker is forcibly terminated after two
+seconds. Changing a DNS-resolved address also replaces the session on the next read.
+
 Remove requires UI confirmation and queues durable retained-topic tombstones.
 Cleanup completes after broker acknowledgement. Broker outage is not deliberate
 machine removal. Unsupported native groups are shown separately from transport

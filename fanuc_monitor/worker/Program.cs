@@ -28,13 +28,66 @@ internal static class Program
         if (code != 0) unsupported[function] = new {code, error = ((Focas.focas_ret)code).ToString()};
         return code == 0;
     }
-    static object Read(JsonElement endpoint)
+    // A worker owns one session on its main thread, shared across read sweeps.
+    sealed class Session : IDisposable
+    {
+        readonly Func<string, ushort, int, ushort> open;
+        readonly Action<ushort> release;
+        (string, ushort, int)? endpoint;
+        ushort handle;
+        public Session(Func<string, ushort, int, ushort> open, Action<ushort> release)
+        { this.open = open; this.release = release; }
+        public ushort Ensure(string host, ushort port, int timeout)
+        {
+            var next = (host, port, timeout);
+            if (endpoint == next) return handle;
+            Dispose();
+            // Record ownership only after allocation succeeds; handle zero is valid.
+            handle = open(host, port, timeout);
+            endpoint = next;
+            return handle;
+        }
+        public void Dispose()
+        {
+            if (endpoint is null) return;
+            endpoint = null;
+            release(handle);
+        }
+    }
+    static ushort OpenSession(string host, ushort port, int timeout)
+    {
+        Require(Focas.cnc_allclibhndl3(host, port, timeout, out ushort handle), "cnc_allclibhndl3");
+        return handle;
+    }
+    static void SessionSelfTest()
+    {
+        int opened = 0; var released = new List<ushort>(); bool fail = false;
+        var session = new Session((host, port, timeout) =>
+        { if (fail) throw new InvalidOperationException("Test allocation failure"); return (ushort)opened++; }, released.Add);
+        void Check(bool value) { if (!value) throw new InvalidOperationException("Session lifecycle self-test failed"); }
+        Check(session.Ensure("machine-a", 8193, 3) == 0);
+        Check(session.Ensure("machine-a", 8193, 3) == 0 && opened == 1 && released.Count == 0);
+        Check(session.Ensure("machine-b", 8193, 3) == 1 && released.SequenceEqual(new ushort[] {0}));
+        Check(session.Ensure("machine-b", 8194, 3) == 2);
+        Check(session.Ensure("machine-b", 8194, 4) == 3);
+        session.Dispose(); // Read failure invalidates ownership before the next sweep.
+        Check(session.Ensure("machine-b", 8194, 4) == 4 && opened == 5);
+        session.Dispose(); session.Dispose();
+        Check(released.SequenceEqual(new ushort[] {0, 1, 2, 3, 4}));
+        fail = true;
+        try { session.Ensure("machine-a", 8193, 3); throw new Exception("Expected allocation failure"); }
+        catch (InvalidOperationException) { }
+        session.Dispose(); Check(released.Count == 5);
+        fail = false; session.Ensure("machine-a", 8193, 3); session.Dispose();
+        Check(opened == 6 && released.Count == 6);
+    }
+    static object Read(JsonElement endpoint, Session session)
     {
         string host = endpoint.GetProperty("host").GetString()!;
         ushort port = endpoint.GetProperty("port").GetUInt16();
         int timeout = endpoint.GetProperty("timeout").GetInt32();
         if (host.Length is < 1 or > 253 || timeout is < 1 or > 10) throw new InvalidOperationException("Invalid endpoint");
-        Require(Focas.cnc_allclibhndl3(host, port, timeout, out ushort handle), "cnc_allclibhndl3");
+        ushort handle = session.Ensure(host, port, timeout);
         try
         {
             var system = new Focas.ODBSYS();
@@ -115,18 +168,20 @@ internal static class Program
                 type = Text(system.mt_type), axes = Text(system.axes), model = "Fanuc " + family,
                 path_scope = "Default FOCAS path only; multi-path qualification pending"}, signals, unsupported, simulation = false};
         }
-        finally { Focas.cnc_freelibhndl(handle); }
+        catch { session.Dispose(); throw; }
     }
     static int Main(string[] args)
     {
         if (args.SequenceEqual(new[] {"--self-test"}))
         {
+            SessionSelfTest();
             if (Scale(450, 2) != 4.5 || SpeedUnit(1) != "in/min" || LoadUnit(0) != "%") return 1;
             var imports = typeof(Focas).GetMethods().Where(m => m.IsDefined(typeof(DllImportAttribute))).Select(m => m.Name).Distinct().Order().ToArray();
-            Console.WriteLine(JsonSerializer.Serialize(new {mapping_tests = "passed", imports}));
+            Console.WriteLine(JsonSerializer.Serialize(new {mapping_tests = "passed", session_tests = "passed", imports}));
             return 0;
         }
         bool started = false;
+        var session = new Session(OpenSession, handle => { Focas.cnc_freelibhndl(handle); });
         try
         {
             string libraryPath = Environment.GetEnvironmentVariable("FOCAS_LIBRARY_PATH")
@@ -151,13 +206,13 @@ internal static class Program
             string? line;
             while ((line = Console.ReadLine()) != null)
             {
-                try { using var request = JsonDocument.Parse(line); Console.WriteLine(JsonSerializer.Serialize(Read(request.RootElement))); }
+                try { using var request = JsonDocument.Parse(line); Console.WriteLine(JsonSerializer.Serialize(Read(request.RootElement, session))); }
                 catch (FocasError error) { Console.WriteLine(JsonSerializer.Serialize(new {error = error.Message, code = error.Code})); }
                 catch (Exception) { Console.WriteLine("{\"error\":\"Invalid native data or unavailable FOCAS read entry point\"}"); }
             }
         }
         catch (Exception) { Console.WriteLine("{\"error\":\"FOCAS native library failed to initialize; verify Linux amd64 dependencies and license\"}"); return 1; }
-        finally { if (started) Focas.cnc_exitprocess(); }
+        finally { try { session.Dispose(); } finally { if (started) Focas.cnc_exitprocess(); } }
         return 0;
     }
     sealed class FocasError(string function, short code) : Exception($"{function}: {((Focas.focas_ret)code)} ({code})")

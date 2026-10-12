@@ -87,7 +87,15 @@ class NativeCollector:
 
     async def close(self):
         if self.process and self.process.returncode is None:
-            self.process.kill()
+            # EOF lets the worker release its persistent FOCAS handle on its
+            # owning thread. Hung native calls still have a bounded shutdown.
+            if self.process.stdin:
+                self.process.stdin.close()
+            try:
+                await asyncio.wait_for(self.process.wait(), 2)
+            except asyncio.TimeoutError:
+                if self.process.returncode is None:
+                    self.process.kill()
             await self.process.wait()
         self.process = None
 

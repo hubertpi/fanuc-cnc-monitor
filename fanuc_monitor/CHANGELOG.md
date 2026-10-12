@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.2-dev
+
+- Reuse one FOCAS connection per machine across successful polling sweeps.
+- Release and reopen the connection after read failures or endpoint changes.
+- Close workers through stdin EOF so native handles are released on their owning
+  thread; force-stop workers that do not exit within two seconds.
+- Add session lifecycle self-tests and cooperative/hung worker shutdown tests.
+- Per-machine polling intervals remain configurable from 1 to 60 seconds.
+
 ## 0.1.1-dev
 
 - Bundle the pinned C# FOCAS binding source and verify its existing SHA-256
