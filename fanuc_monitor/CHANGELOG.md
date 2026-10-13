@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.4
+
+- Package the custom AI/CNC artwork as the Home Assistant add-on icon and logo.
+- Move Appearance near the bottom of the sidebar while preserving saved choices.
+- Add an editable shared page title with persistent storage, input validation and conflicting-edit protection.
+- Preserve machine collection, polling, identities, schedules and OEE accounting.
+
 ## 0.3.3
 
 - Add Automatic, Light and Dark appearance controls to the add-on UI, with saved browser preferences and live HA appearance detection when accessible.

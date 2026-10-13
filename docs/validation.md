@@ -1,5 +1,14 @@
 # Validation
 
+## 0.3.4 — October 12, 2026
+
+Local validation: **80 Python tests** and **8 frontend tests** passed, including
+shared-title persistence across service restart, validation, CSRF/revision checks
+and no collector restart or machine-file changes. Chromium checks cover title
+editing/reload, sidebar appearance, preserved preferences and responsive layout.
+The icon and logo are PNG copies of the approved generated square artwork.
+The complete release container is validated before promotion to main.
+
 ## 0.3.3 — October 12, 2026
 
 Local checks: **78 Python tests**, **8 frontend tests**, JavaScript syntax checks,

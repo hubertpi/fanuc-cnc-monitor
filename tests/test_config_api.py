@@ -120,3 +120,33 @@ def test_ui_preferences_asset_is_served_without_expanding_file_access(tmp_path):
         assert asset.status_code == 200 and 'MonitorUI' in asset.text
         assert client.get('/assets/worker/Program.cs').status_code == 404
         assert client.get('/assets/unlisted.js').status_code == 404
+
+
+def test_shared_title_validation_csrf_revision_and_restart(tmp_path):
+    with TestClient(create_app(tmp_path, {'mode':'simulation'}, development=True)) as client:
+        initial = client.get('/api/status').json()
+        assert initial['ui_settings'] == {'title':'Your machine floor', 'revision':0}
+        payload = {'title':'  Production floor  ', 'revision':0}
+        assert client.put('/api/ui-settings', json=payload).status_code == 403
+        headers = {'x-monitor-csrf':initial['csrf']}
+        assert client.put('/api/ui-settings', json=payload, headers=headers).json() == {'title':'Production floor', 'revision':1}
+        assert client.put('/api/ui-settings', json={'title':'Other','revision':0}, headers=headers).status_code == 409
+        for title in ['   ', 'x'*81, 'A\nB']:
+            assert client.put('/api/ui-settings', json={'title':title,'revision':1}, headers=headers).status_code == 422
+        assert client.get('/api/status').json()['machines'] == []
+        assert not (tmp_path/'machines.json').exists()
+    with TestClient(create_app(tmp_path, {'mode':'simulation'}, development=True)) as client:
+        assert client.get('/api/status').json()['ui_settings'] == {'title':'Production floor','revision':1}
+
+
+def test_title_edit_does_not_restart_existing_collector(tmp_path):
+    with TestClient(create_app(tmp_path, {'mode':'simulation'}, development=True)) as client:
+        headers = {'x-monitor-csrf':client.get('/api/status').json()['csrf']}
+        endpoint = {'host':'192.0.2.33','port':8193,'timeout':3}
+        headers['x-connection-test'] = client.post('/api/test', json=endpoint, headers=headers).json()['test_token']
+        machine = client.post('/api/machines', json={**endpoint,'name':'Lathe'}, headers=headers).json()
+        task = client.app.state.manager.tasks[machine['id']]
+        stored = (tmp_path/'machines.json').read_bytes()
+        client.put('/api/ui-settings',json={'title':'<b>Machine shop</b>','revision':0},headers=headers).raise_for_status()
+        assert client.app.state.manager.tasks[machine['id']] is task
+        assert (tmp_path/'machines.json').read_bytes() == stored

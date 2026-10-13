@@ -1,3 +1,4 @@
+from .ui_settings import UISettings, TitleInput
 import asyncio
 import contextlib
 import json
@@ -46,6 +47,8 @@ def create_app(directory=None, options=None, collector_factory=None, publisher=N
     csrf = secrets.token_urlsafe(32)
     probes = {}
     test_lock = asyncio.Semaphore(2)
+    ui_settings = UISettings(directory / "ui-settings.json")
+    ui_lock = asyncio.Lock()
 
     @asynccontextmanager
     async def lifespan(app):
@@ -152,7 +155,13 @@ def create_app(directory=None, options=None, collector_factory=None, publisher=N
         return {"csrf": csrf, "mode": options.get("mode", "simulation"),
                 "hardware_testing_enabled": options.get("hardware_testing_enabled", False),
                 "mqtt_connected": pub.connected, "mqtt_error": pub.error,
-                "startup_error": app.state.error, "machines": manager.list(), "discovery": app.state.discovery.view(manager.records.values()), "schedule": manager.schedule.view()}
+                "startup_error": app.state.error, "machines": manager.list(), "discovery": app.state.discovery.view(manager.records.values()), "schedule": manager.schedule.view(), "ui_settings": ui_settings.view()}
+
+    @app.put("/api/ui-settings")
+    async def save_ui_settings(value: TitleInput):
+        async with ui_lock:
+            try: return ui_settings.save(value)
+            except ValueError as error: raise HTTPException(409, str(error)) from error
 
     @app.put("/api/schedule")
     async def save_schedule(value: ScheduleInput):

@@ -1,5 +1,5 @@
 name: Fanuc CNC Monitor
-version: 0.3.3
+version: 0.3.4
 slug: fanuc_cnc_monitor
 image: ghcr.io/hubertpi/fanuc-cnc-monitor
 url: https://github.com/hubertpi/fanuc-cnc-monitor

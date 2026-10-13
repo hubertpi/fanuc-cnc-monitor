@@ -5,10 +5,11 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const machine = name => ({id:name,name,controller:{model:'Fixture'},host:'192.0.2.1',port:8193,online:true,enabled:true,signals:{},interval:1,fast_interval:.25,diagnostic_interval:60});
-const status = {machines:['Fanuc 0i-10','alpha','fanuc 0i-2'].map(machine),schedule:{shifts:[]},mode:'focas',mqtt_connected:true,scan:{results:[]}};
+const status = {machines:['Fanuc 0i-10','alpha','fanuc 0i-2'].map(machine),ui_settings:{title:'Your machine floor',revision:0},schedule:{shifts:[]},mode:'focas',mqtt_connected:true,scan:{results:[]}};
 let apiWrites = 0;
 const server = http.createServer((req,res)=>{
   if (req.method !== 'GET') apiWrites++;
+  if (req.url === '/api/ui-settings' && req.method === 'PUT') {let body='';req.on('data',c=>body+=c);req.on('end',()=>{const value=JSON.parse(body);status.ui_settings={title:value.title.trim(),revision:status.ui_settings.revision+1};res.setHeader('Content-Type','application/json');res.end(JSON.stringify(status.ui_settings));});return;}
   if (req.url === '/parent') {res.setHeader('Content-Type','text/html');return res.end('<home-assistant></home-assistant><script>document.querySelector("home-assistant").hass={themes:{darkMode:false}};</script><iframe src="/" style="width:100%;height:95vh;border:0"></iframe>');}
   if (req.url === '/api/status') {res.setHeader('Content-Type','application/json');return res.end(JSON.stringify(status));}
   const name = req.url === '/' ? 'index.html' : req.url.replace('/assets/','');
@@ -50,7 +51,12 @@ const server = http.createServer((req,res)=>{
     await reopened.selectOption('#appearance','dark');
     const colors=await reopened.locator('.machine').first().evaluate(el=>({background:getComputedStyle(el).backgroundColor,color:getComputedStyle(el).color}));
     assert.equal(colors.background,'rgb(25, 43, 56)');assert.equal(colors.color,'rgb(229, 237, 244)');
-    assert.equal(await reopened.locator('#appearance').evaluate(el=>getComputedStyle(el).backgroundColor),'rgb(25, 43, 56)');
+    assert.equal(await reopened.locator('#appearance').evaluate(el=>getComputedStyle(el).backgroundColor),'rgb(34, 57, 70)');
+    assert.equal(await reopened.locator('aside #appearance').count(),1);
+    await reopened.locator('#title-edit').click();
+    await reopened.locator('#page-title').fill('Production floor');
+    await reopened.locator('#title-save').click();
+    await reopened.waitForFunction(()=>document.getElementById('floor-title').textContent==='Production floor');
     await reopened.locator('#add').click();assert.equal(await reopened.locator('#editor').evaluate(el=>getComputedStyle(el).backgroundColor),'rgb(25, 43, 56)');
     await reopened.locator('#close-editor').click();
     if (process.env.UI_SCREENSHOT_DIR) await reopened.locator('body').screenshot({path:path.join(process.env.UI_SCREENSHOT_DIR,'dark.png')});
@@ -66,9 +72,10 @@ const server = http.createServer((req,res)=>{
     await page.goto(base+'/');await page.waitForSelector('.machine');
     assert.equal(await page.locator('html').getAttribute('data-theme'),'dark');
     if (process.env.UI_SCREENSHOT_DIR) await page.screenshot({path:path.join(process.env.UI_SCREENSHOT_DIR,'standalone-mobile.png'),fullPage:true});
-    assert.equal(apiWrites,0);assert.deepEqual(errors,[]);
+    assert.equal(await page.locator('#floor-title').textContent(),'Production floor');
+    assert.equal(apiWrites,1);assert.deepEqual(errors,[]);
     assert.deepEqual(status.machines.map(m=>m.name),['Fanuc 0i-10','alpha','fanuc 0i-2','Beta']);
-    console.log('Chromium UI checks passed: HA appearance, overrides, persistence, four sorts, dialogs, mobile and no API writes.');
+    console.log('Chromium UI checks passed: HA appearance, overrides, persistence, four sorts, dialogs, mobile and shared title persistence (only the intended title API write).');
     await context.close();
   } finally {await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;}).finally(()=>server.close());

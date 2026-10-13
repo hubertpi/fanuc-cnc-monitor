@@ -1,6 +1,7 @@
 "use strict";
 const $ = id => document.getElementById(id);
 let scheduleDraft = null;
+let titleRevision = 0;
 let status = null, editing = null, removing = null, detailId = null, testToken = "", originalEndpoint = "";
 const endpoint = () => ({host: $("host").value.trim(), port: Number($("port").value), timeout: Number($("timeout").value)});
 const endpointKey = value => JSON.stringify([value.host, value.port, value.timeout]);
@@ -65,6 +66,9 @@ function showDetails(machine) {
   if (!$("details").open) $("details").showModal();
 }
 function render() {
+  const title = status.ui_settings?.title || "Your machine floor";
+  if ($("floor-title").textContent !== title) $("floor-title").textContent = title;
+  document.title = `${title} · Fanuc CNC Monitor`;
   const machines = MonitorUI.sortedMachines(status.machines, uiPreferences.sort);
   $("total").textContent = machines.length; $("connected").textContent = machines.filter(m => m.online).length;
   $("disconnected").textContent = machines.filter(m => !m.online).length;
@@ -149,6 +153,18 @@ $("schedule-form").onsubmit=async event=>{
   try{await api("schedule","PUT",scheduleDraft);$("schedule-dialog").close();await refresh();}
   catch(error){$("schedule-error").textContent=error.message;}
   finally{$("schedule-save").disabled=false;}
+};
+$("title-edit").onclick = () => {
+  $("page-title").value = status?.ui_settings?.title || "Your machine floor";
+  titleRevision = status?.ui_settings?.revision || 0;
+  $("title-error").textContent = ""; $("title-dialog").showModal();
+};
+for (const id of ["title-close", "title-cancel"]) $(id).onclick = () => $("title-dialog").close();
+$("title-form").onsubmit = async event => {
+  event.preventDefault(); $("title-save").disabled = true; $("title-error").textContent = "";
+  try {await api("ui-settings", "PUT", {title:$("page-title").value, revision:titleRevision}); $("title-dialog").close(); await refresh();}
+  catch(error) {$("title-error").textContent = error.message;}
+  finally {$("title-save").disabled = false;}
 };
 const uiPreferences = MonitorUI.start(window, () => {if (status) render();});
 refresh(); setInterval(refresh,2000);

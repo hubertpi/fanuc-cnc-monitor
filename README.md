@@ -23,7 +23,7 @@ compile the add-on locally. HA Container without Supervisor and ARM hosts are un
 
 ## Display preferences
 
-The add-on UI has **Automatic**, **Light** and **Dark** appearance choices. Automatic
+The sidebar’s lower section has **Automatic**, **Light** and **Dark** appearance choices. Automatic
 uses HA’s selected appearance when accessible through Ingress; otherwise it follows
 the device appearance. Changes are detected while the page is open.
 
@@ -35,6 +35,11 @@ restart, and do not change machine settings or collection. If browser storage is
 disabled, choices work for the current page and a notice explains they cannot be saved.
 These settings apply to the add-on UI; the separate Lovelace dashboard follows HA’s
 normal theme.
+
+Use **Edit title** beside the page heading to name your machine floor. The title
+is shared across browsers and saved in `/data/ui-settings.json`, including backups.
+It does not rename machines or restart collection. The custom AI/CNC icon and logo
+are packaged for the Home Assistant add-on listing.
 
 ## Polling and diagnostic boost
 
