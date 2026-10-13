@@ -21,6 +21,21 @@ Home Assistant creates one MQTT device per machine. Existing machine UUIDs and
 sensor identities survive updates. Updates download a prebuilt image from GitHub Container Registry; HA does not
 compile the add-on locally. HA Container without Supervisor and ARM hosts are unsupported.
 
+## Display preferences
+
+The add-on UI has **Automatic**, **Light** and **Dark** appearance choices. Automatic
+uses HA’s selected appearance when accessible through Ingress; otherwise it follows
+the device appearance. Changes are detected while the page is open.
+
+Machines default to natural, case-insensitive name order (2 before 10). The sorting
+selector also offers reverse name order and oldest/newest added. Added order uses
+the persistent configuration’s insertion order; edits and restarts preserve it.
+Appearance and sorting are saved in this browser for this HA origin, require no
+restart, and do not change machine settings or collection. If browser storage is
+disabled, choices work for the current page and a notice explains they cannot be saved.
+These settings apply to the add-on UI; the separate Lovelace dashboard follows HA’s
+normal theme.
+
 ## Polling and diagnostic boost
 
 Each CNC has one persistent connection and sequential read requests. It does not

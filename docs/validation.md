@@ -1,5 +1,37 @@
 # Validation
 
+## 0.3.3 — October 12, 2026
+
+Local checks: **78 Python tests**, **8 frontend tests**, JavaScript syntax checks,
+.NET Release build and both worker self-tests passed. Chromium 145 acceptance
+checks covered actual rendered defaults, HA appearance overriding OS preference,
+live theme changes, Light/Dark overrides, saved preferences on reload, all four
+sorts, newly added cards, dark dialogs/controls, mobile width and no API writes.
+Light/dark/mobile rendering was visually inspected. The Chrome binary is a test
+only dependency from Google's official distribution, pinned by Playwright's locked
+browser manifest; it is not included in the add-on image.
+
+Added-order persistence is tested through machine edits and manager restart.
+Backend machine record order, native calls, collection frequencies, utilization
+accounting and discovery identities are unchanged. Preferences are browser-local;
+Automatic falls back to device appearance if HA's frontend is inaccessible.
+
+### Historical workflow failures
+
+- [Run 38253435052](https://github.com/hubertpi/fanuc-cnc-monitor/actions/runs/38253435052):
+  MQTT test broker restart failed with address already in use. The accepted
+  transports/listener shutdown fix was already included in later passing releases.
+- [Run 38322029815](https://github.com/hubertpi/fanuc-cnc-monitor/actions/runs/38322029815):
+  branch-creation push tried publishing unchanged version 0.3.1 from the newer audit
+  commit. Python/.NET/container validation passed; the immutable-tag guard correctly
+  rejected the existing image's different commit. Publishing now skips creation
+  pushes, and a release branch must match its configured version. Immutable tags
+  remain protected. No failed push/PR duplication was found in these runs.
+
+The pipeline now includes frontend/Chromium checks and requires anonymous image
+access on staging as well as main before reporting publishing success. The staged
+release is promoted only after the complete pipeline passes.
+
 ## 0.3.2 — October 12, 2026
 
 Local validation: **76 Python tests passed**. The audited worker covers documented

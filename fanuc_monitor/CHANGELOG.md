@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.3
+
+- Add Automatic, Light and Dark appearance controls to the add-on UI, with saved browser preferences and live HA appearance detection when accessible.
+- Default to natural name sorting; add name descending and oldest/newest added choices without changing machine order or restarting collection.
+- Add frontend preference tests and Chromium UI acceptance checks to release validation.
+- Skip publishing on branch-creation pushes, require release branch/version agreement, and require anonymous image access before a successful publish job.
+- Preserve FOCAS mappings, polling, MQTT sensor identities, schedules and accounting.
+
 ## 0.3.2
 
 - Group percentage sensors under OEE - 24hr, OEE - 1st Shift, OEE - 2nd Shift, OEE - Week and OEE - Month, preserving identities.

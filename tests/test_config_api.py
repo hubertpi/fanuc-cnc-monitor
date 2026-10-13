@@ -109,3 +109,14 @@ def test_stale_data_marks_machine_offline_independently(tmp_path):
         assert not status["online"] and "stale" in status["error"]
         pub = app.state.publisher
         assert pub.journal["topics"][pub.machine_root(identity) + "/availability"] == "offline"
+
+
+def test_ui_preferences_asset_is_served_without_expanding_file_access(tmp_path):
+    with TestClient(create_app(tmp_path, {'mode':'simulation'}, development=True)) as client:
+        page = client.get('/')
+        assert 'assets/preferences.js' in page.text
+        assert 'id="appearance"' in page.text and 'id="machine-sort"' in page.text
+        asset = client.get('/assets/preferences.js')
+        assert asset.status_code == 200 and 'MonitorUI' in asset.text
+        assert client.get('/assets/worker/Program.cs').status_code == 404
+        assert client.get('/assets/unlisted.js').status_code == 404

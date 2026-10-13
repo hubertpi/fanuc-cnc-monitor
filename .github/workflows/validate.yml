@@ -22,13 +22,22 @@ jobs:
       - run: dotnet build fanuc_monitor/worker/Monitor.Worker.csproj --configuration Release
       - run: dotnet fanuc_monitor/worker/bin/Release/net10.0/Monitor.Worker.dll --self-test
       - run: pytest tests -q
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --ignore-scripts
+      - run: node --check fanuc_monitor/web/app.js && node --check fanuc_monitor/web/preferences.js
+      - run: npm run test:frontend
+      - run: npx playwright install-deps chromium
+      - run: python tools/install_test_browser.py
+      - run: npm run test:ui
       - run: docker build --tag fanuc-monitor:test fanuc_monitor
       - run: docker run --rm --entrypoint dotnet fanuc-monitor:test /opt/worker/Monitor.Worker.dll --self-test
       - run: docker run --rm --network none --entrypoint dotnet fanuc-monitor:test /opt/worker/Monitor.Worker.dll --native-self-test
 
   publish:
     needs: test
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/'))
+    if: github.event_name == 'push' && github.event.created != true && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/'))
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -47,6 +56,9 @@ jobs:
           version=str(config['version'])
           image=config['image']
           assert re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+',version)
+          ref=os.environ['GITHUB_REF']
+          if ref.startswith('refs/heads/release/'):
+              assert ref.removeprefix('refs/heads/release/')==version, 'Release branch must match add-on version'
           assert image=='ghcr.io/hubertpi/fanuc-cnc-monitor'
           with open(os.environ['GITHUB_ENV'],'a') as output:
               output.write(f'ADDON_VERSION={version}\nADDON_IMAGE={image}:{version}\n')
@@ -72,14 +84,8 @@ jobs:
           fi
       - name: Check anonymous download access
         run: |
-          if python tools/check_image.py "$ADDON_IMAGE"; then
-            echo "Public image ready: $ADDON_IMAGE" >> "$GITHUB_STEP_SUMMARY"
-          elif [ "$GITHUB_REF" = 'refs/heads/main' ]; then
-            echo 'HA must be able to pull the image anonymously.'
-            exit 1
-          else
-            echo 'Image is published. Set its package visibility to Public before releasing to main.' >> "$GITHUB_STEP_SUMMARY"
-          fi
+          python tools/check_image.py "$ADDON_IMAGE"
+          echo "Public image ready: $ADDON_IMAGE" >> "$GITHUB_STEP_SUMMARY"
       - name: Sign out of registry
         if: always()
         run: docker logout ghcr.io

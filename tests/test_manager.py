@@ -151,3 +151,19 @@ def test_utilization_availability_survives_cnc_outage(tmp_path):
     config=json.loads(pub.journal['topics'][pub.discovery_topic('test')])
     assert config['components'][key('production_month_utilization')]['availability']==[{'topic':pub.online_topic}]
     assert len(config['components'][key('rpm')]['availability'])==2
+
+
+def test_added_order_survives_edit_and_restart_without_created_timestamps(tmp_path):
+    async def scenario():
+        pub = Publisher(tmp_path)
+        manager = Manager(Store(tmp_path/'machines.json'), pub, Simulator)
+        first = await manager.save(MachineInput(host='first.example', name='Zed', enabled=False))
+        second = await manager.save(MachineInput(host='second.example', name='Alpha', enabled=False))
+        await manager.save(MachineInput(host='first.example', name='Renamed', enabled=False, revision=1), first['id'])
+        assert [m['id'] for m in manager.list()] == [first['id'], second['id']]
+        await manager.close()
+        restored = Manager(Store(tmp_path/'machines.json'), Publisher(tmp_path), Simulator)
+        assert [m['id'] for m in restored.list()] == [first['id'], second['id']]
+        assert all('created_at' not in m for m in restored.list())
+        await restored.close()
+    asyncio.run(scenario())

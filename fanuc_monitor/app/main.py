@@ -142,7 +142,7 @@ def create_app(directory=None, options=None, collector_factory=None, publisher=N
 
     @app.get("/assets/{name}")
     async def asset(name: str):
-        if name not in {"app.js", "style.css"}:
+        if name not in {"app.js", "preferences.js", "style.css"}:
             raise HTTPException(404)
         return FileResponse(Path(__file__).parent.parent / "web" / name)
 

@@ -65,7 +65,7 @@ function showDetails(machine) {
   if (!$("details").open) $("details").showModal();
 }
 function render() {
-  const machines = status.machines;
+  const machines = MonitorUI.sortedMachines(status.machines, uiPreferences.sort);
   $("total").textContent = machines.length; $("connected").textContent = machines.filter(m => m.online).length;
   $("disconnected").textContent = machines.filter(m => !m.online).length;
   $("mqtt").textContent = status.mqtt_connected ? "Connected" : "Disconnected";
@@ -150,4 +150,5 @@ $("schedule-form").onsubmit=async event=>{
   catch(error){$("schedule-error").textContent=error.message;}
   finally{$("schedule-save").disabled=false;}
 };
+const uiPreferences = MonitorUI.start(window, () => {if (status) render();});
 refresh(); setInterval(refresh,2000);

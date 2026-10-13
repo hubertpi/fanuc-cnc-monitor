@@ -130,3 +130,12 @@ follows the shift start day. Removing a machine also removes its local statistic
   integration; latest totals and retained states are republished on recovery.
 
 Diagnostic exports omit broker credentials but contain machine addresses and data.
+
+## Operator-message compatibility
+
+An `EW_PARAM` (9) response from `cnc_rdopmsg` can indicate the documented requirement
+that parameter 11931 bit 1 is zero on 0i-D/F and 30i-family controllers. The current
+selector 0 and 262-byte buffer match the documented first-message interface. This
+add-on does not read or modify that parameter and cannot confirm its actual setting.
+No alternate read or CNC change is introduced by 0.3.3. See the
+[FOCAS operator-message reference](https://www.inventcom.net/fanuc-focas-library/misc/cnc_rdopmsg).
